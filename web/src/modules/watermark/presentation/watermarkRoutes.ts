@@ -4,6 +4,8 @@ import type { Session } from "@shopify/shopify-api";
 import type { CreateWatermarkJob } from "../application/CreateWatermarkJob.ts";
 import type { ListWatermarkJobs } from "../application/ListWatermarkJobs.ts";
 import type { ProcessWatermarkJob } from "../application/ProcessWatermarkJob.ts";
+import type { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
+import type { WatermarkWorker } from "../../jobs/infrastructure/WatermarkWorker.ts";
 import type {
   WatermarkJob,
   WatermarkPosition,
@@ -13,6 +15,8 @@ interface Dependencies {
   createWatermarkJob: CreateWatermarkJob;
   listWatermarkJobs: ListWatermarkJobs;
   processWatermarkJob: ProcessWatermarkJob;
+  enqueueJob?: EnqueueJob;
+  worker?: WatermarkWorker;
 }
 interface ShopifyLocals extends Record<string, unknown> {
   shopify: { session: Session };
@@ -62,6 +66,18 @@ export function createWatermarkRouter(dependencies: Dependencies) {
           position,
           opacity: Number(body.opacity ?? 0.7),
         });
+
+        if (dependencies.enqueueJob) {
+          await dependencies.enqueueJob.execute({
+            jobType: "WATERMARK_PROCESS",
+            payload: {
+              jobId: job.id,
+              shopDomain: response.locals.shopify.session.shop,
+            },
+          });
+          dependencies.worker?.trigger();
+        }
+
         response.status(201).send({ job: toResponse(job) });
       } catch (error) {
         sendError(response, error, 400);

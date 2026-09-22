@@ -33,6 +33,10 @@ import { AdminGraphqlMediaGateway } from "./src/modules/shopify-publication/infr
 import { PrismaPublishedMediaRepository } from "./src/modules/shopify-publication/infrastructure/PrismaPublishedMediaRepository.ts";
 import { PrismaWatermarkResultReader } from "./src/modules/shopify-publication/infrastructure/PrismaWatermarkResultReader.ts";
 import { createPublicationRouter } from "./src/modules/shopify-publication/presentation/publicationRoutes.ts";
+import { DatabaseJobQueue } from "./src/modules/jobs/infrastructure/DatabaseJobQueue.ts";
+import { EnqueueJob } from "./src/modules/jobs/application/EnqueueJob.ts";
+import { RunPendingJobs } from "./src/modules/jobs/application/RunPendingJobs.ts";
+import { WatermarkWorker } from "./src/modules/jobs/infrastructure/WatermarkWorker.ts";
 const PORT = parseInt(
   process.env.BACKEND_PORT || process.env.PORT || "3000",
   10
@@ -80,6 +84,19 @@ const processWatermarkJob = new ProcessWatermarkJob(
   watermarkMedia,
   new SharpWatermarkProcessor()
 );
+
+const jobQueue = new DatabaseJobQueue(prisma);
+const enqueueJob = new EnqueueJob(jobQueue);
+const runPendingJobs = new RunPendingJobs(jobQueue);
+
+runPendingJobs.registerHandler("WATERMARK_PROCESS", async (payload) => {
+  const jobId = String(payload.jobId);
+  const shopDomain = String(payload.shopDomain);
+  await processWatermarkJob.execute(jobId, shopDomain);
+});
+
+const watermarkWorker = new WatermarkWorker(runPendingJobs);
+watermarkWorker.start();
 // Set up Shopify authentication and webhook handling
 app.get(shopify.config.auth.path, shopify.auth.begin());
 app.get(
@@ -119,6 +136,8 @@ app.use(
     createWatermarkJob,
     listWatermarkJobs,
     processWatermarkJob,
+    enqueueJob,
+    worker: watermarkWorker,
   })
 );
 app.use(

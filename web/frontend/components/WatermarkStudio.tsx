@@ -42,7 +42,10 @@ type WatermarkJobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
 interface WatermarkJobDto {
   id: string;
   productId: string;
-  text: string;
+  watermarkType?: "TEXT" | "IMAGE";
+  text: string | null;
+  logoUrl: string | null;
+  logoScale?: number;
   position: WatermarkPosition;
   opacity: number;
   status: WatermarkJobStatus;
@@ -89,7 +92,11 @@ export function WatermarkStudio() {
   const shopify = useAppBridge();
   const queryClient = useQueryClient();
   const [productId, setProductId] = useState("");
+  const [watermarkType, setWatermarkType] = useState<"TEXT" | "IMAGE">("TEXT");
   const [text, setText] = useState("© My shop");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [logoScalePercent, setLogoScalePercent] = useState(20);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [position, setPosition] = useState<WatermarkPosition>("BOTTOM_RIGHT");
   const [opacityPercent, setOpacityPercent] = useState(70);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -103,7 +110,15 @@ export function WatermarkStudio() {
   const jobs = useQuery<JobsResponse, Error>(
     ["watermarkJobs"],
     () => fetchJson<JobsResponse>("/api/watermarks/jobs"),
-    { refetchOnWindowFocus: false }
+    {
+      refetchInterval: (data) => {
+        const hasPending = data?.jobs.some(
+          (j) => j.status === "PENDING" || j.status === "PROCESSING"
+        );
+        return hasPending ? 1500 : false;
+      },
+      refetchOnWindowFocus: false,
+    }
   );
 
   const publications = useQuery<PublicationsResponse, Error>(
@@ -121,17 +136,60 @@ export function WatermarkStudio() {
     if (!productId && products[0]) setProductId(products[0].id);
   }, [productId, products]);
 
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsUploadingLogo(true);
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const res = await fetchJson<{ assetId: string; url: string }>(
+            "/api/media/upload",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ dataUrl: reader.result as string }),
+            }
+          );
+          setLogoUrl(res.url);
+          shopify.toast.show("Đã tải logo lên thành công");
+        } catch (err: unknown) {
+          shopify.toast.show(
+            `Không tải được logo: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            { isError: true }
+          );
+        } finally {
+          setIsUploadingLogo(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch {
+      setIsUploadingLogo(false);
+    }
+  };
+
   const createAndProcess = useMutation<WatermarkJobDto, Error>(
     async () => {
+      const payload: Record<string, unknown> = {
+        productId,
+        watermarkType,
+        position,
+        opacity: opacityPercent / 100,
+      };
+      if (watermarkType === "TEXT") {
+        payload.text = text;
+      } else {
+        payload.logoUrl = logoUrl;
+        payload.logoScale = logoScalePercent / 100;
+      }
+
       const created = await fetchJson<JobResponse>("/api/watermarks/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId,
-          text,
-          position,
-          opacity: opacityPercent / 100,
-        }),
+        body: JSON.stringify(payload),
       });
       return (
         await fetchJson<JobResponse>(
@@ -143,7 +201,7 @@ export function WatermarkStudio() {
     {
       onSuccess: (job) => {
         setPreviewPath(job.resultUrl);
-        shopify.toast.show("Đã tạo ảnh watermark");
+        shopify.toast.show("Đã tạo ảnh watermark thành công");
       },
       onError: (error) => {
         shopify.toast.show(`Không tạo được watermark: ${error.message}`, {
@@ -214,6 +272,29 @@ export function WatermarkStudio() {
     }
   );
 
+  const restoreFromShopify = useMutation<
+    { success: boolean },
+    Error,
+    WatermarkJobDto
+  >(
+    async (job) =>
+      await fetchJson<{ success: boolean }>(
+        `/api/publications/jobs/${encodeURIComponent(job.id)}/restore`,
+        { method: "POST" }
+      ),
+    {
+      onSuccess: async () => {
+        shopify.toast.show("Đã khôi phục ảnh gốc trên Shopify thành công");
+        await queryClient.invalidateQueries(["publishedMedia"]);
+      },
+      onError: (error) => {
+        shopify.toast.show(`Không khôi phục được ảnh: ${error.message}`, {
+          isError: true,
+        });
+      },
+    }
+  );
+
   const selectedProduct = products.find((product) => product.id === productId);
   const publishedJobIds = new Set(
     (publications.data?.publications ?? []).map(
@@ -221,11 +302,20 @@ export function WatermarkStudio() {
     )
   );
   const canSubmit =
-    Boolean(productId && text.trim()) && !createAndProcess.isLoading;
+    Boolean(
+      productId && (watermarkType === "TEXT" ? text.trim() : logoUrl.trim())
+    ) && !createAndProcess.isLoading;
+
   const jobRows = (jobs.data?.jobs ?? []).map((job) => [
     new Date(job.createdAt).toLocaleString("vi-VN"),
     productTitle(job.productId, products),
-    job.text,
+    job.watermarkType === "IMAGE" ? (
+      <Text as="span" variant="bodyMd">
+        🖼️ [Logo]
+      </Text>
+    ) : (
+      job.text ?? "—"
+    ),
     <Badge key={`${job.id}-status`} status={badgeStatus(job.status)}>
       {statusLabel(job.status)}
     </Badge>,
@@ -235,7 +325,21 @@ export function WatermarkStudio() {
           Xem ảnh
         </Button>
         {publishedJobIds.has(job.id) ? (
-          <Badge status="success">Đã lên Shopify</Badge>
+          <Stack spacing="extraTight">
+            <Badge status="success">Đã lên Shopify</Badge>
+            <Button
+              destructive
+              size="slim"
+              loading={
+                restoreFromShopify.isLoading &&
+                restoreFromShopify.variables?.id === job.id
+              }
+              disabled={restoreFromShopify.isLoading}
+              onClick={() => restoreFromShopify.mutate(job)}
+            >
+              Khôi phục ảnh gốc
+            </Button>
+          </Stack>
         ) : (
           <Button
             primary
@@ -263,7 +367,10 @@ export function WatermarkStudio() {
         Thử lại
       </Button>
     ) : (
-      "—"
+      <Stack spacing="extraTight" alignment="center">
+        <Spinner size="small" />
+        <Text as="span" variant="bodySm">Đang xử lý ngầm...</Text>
+      </Stack>
     ),
   ]);
 
@@ -303,14 +410,66 @@ export function WatermarkStudio() {
                 disabled={products.length === 0}
                 onChange={setProductId}
               />
-              <TextField
-                label="Nội dung watermark"
-                value={text}
-                maxLength={100}
-                autoComplete="off"
-                showCharacterCount
-                onChange={setText}
+              <Select
+                label="Loại watermark"
+                options={[
+                  { label: "Văn bản (Text)", value: "TEXT" },
+                  { label: "Hình ảnh / Logo (Image)", value: "IMAGE" },
+                ]}
+                value={watermarkType}
+                onChange={(value) => setWatermarkType(value as "TEXT" | "IMAGE")}
               />
+              {watermarkType === "TEXT" ? (
+                <TextField
+                  label="Nội dung watermark"
+                  value={text}
+                  maxLength={100}
+                  autoComplete="off"
+                  showCharacterCount
+                  onChange={setText}
+                />
+              ) : (
+                <Stack vertical spacing="tight">
+                  <TextField
+                    label="URL Logo"
+                    value={logoUrl}
+                    autoComplete="off"
+                    onChange={setLogoUrl}
+                    helpText="Nhập URL ảnh logo hoặc chọn file bên dưới để tải lên"
+                  />
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        marginBottom: "4px",
+                        fontSize: "14px",
+                      }}
+                    >
+                      Tải lên file Logo (PNG/JPG):
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={handleLogoUpload}
+                      disabled={isUploadingLogo}
+                    />
+                    {isUploadingLogo && <Spinner size="small" />}
+                  </div>
+                  <RangeSlider
+                    label={`Kích thước logo: ${logoScalePercent}%`}
+                    min={5}
+                    max={60}
+                    step={5}
+                    value={logoScalePercent}
+                    output
+                    onChange={(value) =>
+                      setLogoScalePercent(
+                        Array.isArray(value) ? value[0] : value
+                      )
+                    }
+                  />
+                </Stack>
+              )}
               <Select
                 label="Vị trí"
                 options={positionOptions}
