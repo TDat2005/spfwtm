@@ -1,0 +1,164 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum CatalogProductStatus {
+  ACTIVE
+  DRAFT
+  ARCHIVED
+}
+
+model Shop {
+  id             String           @id @default(cuid()) @db.VarChar(30)
+  domain         String           @unique @db.VarChar(255)
+  products       CatalogProduct[]
+  mediaAssets    MediaAsset[]
+  watermarkJobs  WatermarkJob[]
+  publishedMedia PublishedMedia[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@map("shops")
+}
+
+model CatalogProduct {
+  id               String               @id @default(cuid()) @db.VarChar(30)
+  shopId           String               @db.VarChar(30)
+  shopifyProductId String               @db.VarChar(255)
+  title            String               @db.VarChar(255)
+  status           CatalogProductStatus
+  imageUrl         String?              @db.Text
+  imageAltText     String?              @db.Text
+
+  sourceVersion     Int       @default(1)
+  sourceMediaId     String?   @db.VarChar(255)
+  sourceContentHash String?   @db.Char(64)
+  needsReview       Boolean   @default(false)
+  deletedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop          Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  watermarkJobs WatermarkJob[]
+
+  @@unique([shopId, shopifyProductId])
+  @@index([shopId, deletedAt])
+  @@map("catalog_products")
+}
+
+enum MediaAssetKind {
+  SOURCE
+  PROCESSED
+}
+
+model MediaAsset {
+  id          String         @id @db.VarChar(36)
+  shopId      String         @db.VarChar(30)
+  kind        MediaAssetKind
+  storageKey  String         @unique @db.VarChar(500)
+  sourceUrl   String?        @db.Text
+  mimeType    String         @db.VarChar(100)
+  contentHash String         @db.Char(64)
+  byteSize    Int
+  createdAt   DateTime       @default(now())
+
+  shop          Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  resultForJobs WatermarkJob[] @relation("WatermarkResult")
+
+  @@index([shopId, createdAt])
+  @@index([shopId, contentHash])
+  @@map("media_assets")
+}
+
+enum WatermarkJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum WatermarkPosition {
+  TOP_LEFT
+  TOP_RIGHT
+  CENTER
+  BOTTOM_LEFT
+  BOTTOM_RIGHT
+}
+
+enum WatermarkType {
+  TEXT
+  IMAGE
+}
+
+model WatermarkJob {
+  id               String             @id @db.VarChar(36)
+  shopId           String             @db.VarChar(30)
+  catalogProductId String             @db.VarChar(30)
+  sourceImageUrl   String             @db.Text
+  watermarkType    WatermarkType      @default(TEXT)
+  text             String?            @db.VarChar(100)
+  logoUrl          String?            @db.Text
+  logoScale        Float              @default(0.2)
+  position         WatermarkPosition
+  opacity          Float
+  status           WatermarkJobStatus @default(PENDING)
+  resultMediaId    String?            @db.VarChar(36)
+  errorMessage     String?            @db.Text
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  shop           Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product        CatalogProduct  @relation(fields: [catalogProductId], references: [id], onDelete: Restrict)
+  resultMedia    MediaAsset?     @relation("WatermarkResult", fields: [resultMediaId], references: [id], onDelete: SetNull)
+  publishedMedia PublishedMedia?
+
+  @@index([shopId, createdAt])
+  @@index([shopId, status])
+  @@map("watermark_jobs")
+}
+
+enum BackgroundJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model BackgroundJob {
+  id          String              @id @db.VarChar(36)
+  jobType     String              @db.VarChar(50)
+  payload     String              @db.Text
+  status      BackgroundJobStatus @default(PENDING)
+  attempts    Int                 @default(0)
+  maxAttempts Int                 @default(3)
+  lastError   String?             @db.Text
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([status, createdAt])
+  @@map("background_jobs")
+}
+
+model PublishedMedia {
+  id               String   @id @db.VarChar(36)
+  shopId           String   @db.VarChar(30)
+  watermarkJobId   String   @unique @db.VarChar(36)
+  shopifyProductId String   @db.VarChar(255)
+  shopifyMediaId   String   @db.VarChar(255)
+  imageUrl         String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  shop         Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  watermarkJob WatermarkJob @relation(fields: [watermarkJobId], references: [id], onDelete: Restrict)
+
+  @@unique([shopId, shopifyMediaId])
+  @@index([shopId, createdAt])
+  @@index([shopId, shopifyProductId])
+  @@map("published_media")
+}
