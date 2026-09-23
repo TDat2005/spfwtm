@@ -22,6 +22,9 @@ import { createMediaRouter } from "./src/modules/media/presentation/mediaRoutes.
 import { CreateWatermarkJob } from "./src/modules/watermark/application/CreateWatermarkJob.ts";
 import { ListWatermarkJobs } from "./src/modules/watermark/application/ListWatermarkJobs.ts";
 import { ProcessWatermarkJob } from "./src/modules/watermark/application/ProcessWatermarkJob.ts";
+import { GetWatermarkJob } from "./src/modules/watermark/application/GetWatermarkJob.ts";
+import { RetryWatermarkJob } from "./src/modules/watermark/application/RetryWatermarkJob.ts";
+import { CancelWatermarkJob } from "./src/modules/watermark/application/CancelWatermarkJob.ts";
 import { PrismaProductImageReader } from "./src/modules/watermark/infrastructure/PrismaProductImageReader.ts";
 import { PrismaWatermarkJobRepository } from "./src/modules/watermark/infrastructure/PrismaWatermarkJobRepository.ts";
 import { SharpWatermarkProcessor } from "./src/modules/watermark/infrastructure/SharpWatermarkProcessor.ts";
@@ -33,10 +36,10 @@ import { AdminGraphqlMediaGateway } from "./src/modules/shopify-publication/infr
 import { PrismaPublishedMediaRepository } from "./src/modules/shopify-publication/infrastructure/PrismaPublishedMediaRepository.ts";
 import { PrismaWatermarkResultReader } from "./src/modules/shopify-publication/infrastructure/PrismaWatermarkResultReader.ts";
 import { createPublicationRouter } from "./src/modules/shopify-publication/presentation/publicationRoutes.ts";
-import { DatabaseJobQueue } from "./src/modules/jobs/infrastructure/DatabaseJobQueue.ts";
 import { EnqueueJob } from "./src/modules/jobs/application/EnqueueJob.ts";
-import { RunPendingJobs } from "./src/modules/jobs/application/RunPendingJobs.ts";
-import { WatermarkWorker } from "./src/modules/jobs/infrastructure/WatermarkWorker.ts";
+import { BullMqJobQueue } from "./src/modules/jobs/infrastructure/BullMqJobQueue.ts";
+import { BullMqWorker } from "./src/modules/jobs/infrastructure/BullMqWorker.ts";
+import { redisRuntimeConfigFromEnv } from "./src/modules/jobs/infrastructure/RedisConnection.ts";
 const PORT = parseInt(
   process.env.BACKEND_PORT || process.env.PORT || "3000",
   10
@@ -79,23 +82,37 @@ const createWatermarkJob = new CreateWatermarkJob(
   new PrismaProductImageReader(prisma)
 );
 const listWatermarkJobs = new ListWatermarkJobs(watermarkRepository);
+const getWatermarkJob = new GetWatermarkJob(watermarkRepository);
+const retryWatermarkJob = new RetryWatermarkJob(watermarkRepository);
+const cancelWatermarkJob = new CancelWatermarkJob(watermarkRepository);
 const processWatermarkJob = new ProcessWatermarkJob(
   watermarkRepository,
   watermarkMedia,
   new SharpWatermarkProcessor()
 );
 
-const jobQueue = new DatabaseJobQueue(prisma);
+const redisConfig = redisRuntimeConfigFromEnv();
+const jobQueue = new BullMqJobQueue({
+  queueName: redisConfig.queueName,
+  connection: redisConfig.producerConnection,
+  prefix: redisConfig.prefix,
+});
 const enqueueJob = new EnqueueJob(jobQueue);
-const runPendingJobs = new RunPendingJobs(jobQueue);
-
-runPendingJobs.registerHandler("WATERMARK_PROCESS", async (payload) => {
-  const jobId = String(payload.jobId);
-  const shopDomain = String(payload.shopDomain);
-  await processWatermarkJob.execute(jobId, shopDomain);
+const watermarkWorker = new BullMqWorker({
+  queueName: redisConfig.queueName,
+  connection: redisConfig.workerConnection,
+  concurrency: redisConfig.concurrency,
+  prefix: redisConfig.prefix,
 });
 
-const watermarkWorker = new WatermarkWorker(runPendingJobs);
+watermarkWorker.registerHandler("WATERMARK_PROCESS", async (payload) => {
+  const jobId = String(payload.jobId);
+  const shopDomain = String(payload.shopDomain);
+  await processWatermarkJob.execute(jobId, shopDomain, {
+    resumeProcessing: true,
+  });
+});
+
 watermarkWorker.start();
 // Set up Shopify authentication and webhook handling
 app.get(shopify.config.auth.path, shopify.auth.begin());
@@ -136,8 +153,10 @@ app.use(
     createWatermarkJob,
     listWatermarkJobs,
     processWatermarkJob,
+    getWatermarkJob,
+    retryWatermarkJob,
+    cancelWatermarkJob,
     enqueueJob,
-    worker: watermarkWorker,
   })
 );
 app.use(
@@ -225,4 +244,37 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res, _next) => {
     );
 });
 
-app.listen(PORT);
+const server = app.listen(PORT, () => {
+  console.log(`Backend đang chạy tại port ${PORT}.`);
+});
+
+let isShuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`Nhận ${signal}, đang dừng ứng dụng an toàn...`);
+
+  const closeHttpServer = new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+
+  const results = await Promise.allSettled([
+    closeHttpServer,
+    watermarkWorker.stop(),
+  ]);
+  results.push(
+    ...(await Promise.allSettled([jobQueue.close(), prisma.$disconnect()]))
+  );
+
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected"
+  );
+  if (failed) {
+    console.error("Không thể dừng sạch toàn bộ tài nguyên:", failed.reason);
+    process.exitCode = 1;
+  }
+}
+
+process.once("SIGINT", () => void shutdown("SIGINT"));
+process.once("SIGTERM", () => void shutdown("SIGTERM"));

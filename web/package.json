@@ -20,9 +20,11 @@
     "@prisma/client": "7.10.0",
     "@shopify/shopify-app-express": "^5.0.8",
     "@shopify/shopify-app-session-storage-sqlite": "^4.0.8",
+    "bullmq": "^6.3.8",
     "compression": "^1.7.4",
     "cross-env": "^7.0.3",
     "dotenv": "^18.0.0",
+    "ioredis": "^6.0.0",
     "serve-static": "^1.14.1",
     "sharp": "^0.35.4"
   },

@@ -1,45 +1,49 @@
+import {
+  WatermarkConfiguration,
+  type WatermarkConfigurationProps,
+  type WatermarkFontFamily,
+  type WatermarkLayout,
+  type WatermarkPosition,
+  type WatermarkType,
+} from "./WatermarkConfiguration.ts";
+
 export type WatermarkJobStatus =
   | "PENDING"
   | "PROCESSING"
   | "COMPLETED"
-  | "FAILED";
-export type WatermarkPosition =
-  | "TOP_LEFT"
-  | "TOP_RIGHT"
-  | "CENTER"
-  | "BOTTOM_LEFT"
-  | "BOTTOM_RIGHT";
+  | "FAILED"
+  | "CANCELLED";
 
-export type WatermarkType = "TEXT" | "IMAGE";
+export { WatermarkConfiguration } from "./WatermarkConfiguration.ts";
+export type {
+  WatermarkConfigurationProps,
+  WatermarkFontFamily,
+  WatermarkLayout,
+  WatermarkPosition,
+  WatermarkType,
+} from "./WatermarkConfiguration.ts";
 
-interface WatermarkJobProps {
+export interface WatermarkJobProps {
   id: string;
   shopDomain: string;
   productId: string;
   sourceImageUrl: string;
-  watermarkType?: WatermarkType;
-  text?: string | null;
-  logoUrl?: string | null;
-  logoScale?: number;
-  position: WatermarkPosition;
-  opacity: number;
+  configuration: WatermarkConfiguration | WatermarkConfigurationProps;
   status?: WatermarkJobStatus;
   resultMediaId?: string | null;
   errorMessage?: string | null;
   createdAt?: Date;
 }
 
+/**
+ * Aggregate Root: đại diện một lần xử lý watermark và bảo vệ vòng đời của job.
+ */
 export class WatermarkJob {
   readonly id: string;
   readonly shopDomain: string;
   readonly productId: string;
   readonly sourceImageUrl: string;
-  readonly watermarkType: WatermarkType;
-  readonly text: string | null;
-  readonly logoUrl: string | null;
-  readonly logoScale: number;
-  readonly position: WatermarkPosition;
-  readonly opacity: number;
+  readonly configuration: WatermarkConfiguration;
   readonly createdAt: Date;
   private currentStatus: WatermarkJobStatus;
   private currentResultMediaId: string | null;
@@ -52,47 +56,17 @@ export class WatermarkJob {
       throw new Error("Shop domain không được để trống");
     if (!props.productId.trim())
       throw new Error("Product ID không được để trống");
-    if (!isHttpUrl(props.sourceImageUrl))
-      throw new Error("URL ảnh nguồn không hợp lệ");
-
-    const type = props.watermarkType ?? "TEXT";
-    let text: string | null = null;
-    let logoUrl: string | null = null;
-
-    if (type === "TEXT") {
-      text = props.text?.trim() ?? "";
-      if (!text) throw new Error("Nội dung watermark không được để trống khi chọn loại chữ");
-      if (text.length > 100)
-        throw new Error("Nội dung watermark không được vượt quá 100 ký tự");
-    } else if (type === "IMAGE") {
-      logoUrl = props.logoUrl?.trim() ?? "";
-      if (!logoUrl) throw new Error("URL logo không được để trống khi chọn loại ảnh");
-      if (!isHttpUrl(logoUrl) && !logoUrl.startsWith("/api/media/")) {
-        throw new Error("URL logo không hợp lệ");
-      }
-    }
-
-    const scale = Number.isFinite(props.logoScale) && props.logoScale! > 0 && props.logoScale! <= 1
-      ? props.logoScale!
-      : 0.2;
-
-    if (
-      !Number.isFinite(props.opacity) ||
-      props.opacity < 0 ||
-      props.opacity > 1
-    )
-      throw new Error("Opacity phải nằm trong khoảng từ 0 đến 1");
+    if (!isHttpsUrl(props.sourceImageUrl))
+      throw new Error("URL ảnh nguồn phải sử dụng HTTPS");
 
     this.id = props.id;
     this.shopDomain = props.shopDomain;
     this.productId = props.productId;
     this.sourceImageUrl = props.sourceImageUrl;
-    this.watermarkType = type;
-    this.text = text;
-    this.logoUrl = logoUrl;
-    this.logoScale = scale;
-    this.position = props.position;
-    this.opacity = props.opacity;
+    this.configuration =
+      props.configuration instanceof WatermarkConfiguration
+        ? props.configuration
+        : new WatermarkConfiguration(props.configuration);
     this.currentStatus = props.status ?? "PENDING";
     this.currentResultMediaId = props.resultMediaId ?? null;
     this.currentErrorMessage = props.errorMessage ?? null;
@@ -109,9 +83,55 @@ export class WatermarkJob {
     return this.currentErrorMessage;
   }
 
+  get watermarkType(): WatermarkType {
+    return this.configuration.type;
+  }
+  get text(): string | null {
+    return this.configuration.text;
+  }
+  get logoUrl(): string | null {
+    return this.configuration.logoUrl;
+  }
+  get logoScale(): number {
+    return this.configuration.logoScale;
+  }
+  get position(): WatermarkPosition {
+    return this.configuration.position;
+  }
+  get opacity(): number {
+    return this.configuration.opacity;
+  }
+  get layout(): WatermarkLayout {
+    return this.configuration.layout;
+  }
+  get rotation(): number {
+    return this.configuration.rotation;
+  }
+  get offsetX(): number {
+    return this.configuration.offsetX;
+  }
+  get offsetY(): number {
+    return this.configuration.offsetY;
+  }
+  get fontFamily(): WatermarkFontFamily {
+    return this.configuration.fontFamily;
+  }
+  get fontSize(): number {
+    return this.configuration.fontSize;
+  }
+  get textColor(): string {
+    return this.configuration.textColor;
+  }
+  get strokeColor(): string {
+    return this.configuration.strokeColor;
+  }
+  get strokeWidth(): number {
+    return this.configuration.strokeWidth;
+  }
+
   start(): void {
-    if (this.currentStatus !== "PENDING" && this.currentStatus !== "FAILED")
-      throw new Error("Job không thể bắt đầu ở trạng thái hiện tại");
+    if (this.currentStatus !== "PENDING")
+      throw new Error("Chỉ job đang chờ mới có thể bắt đầu");
     this.currentStatus = "PROCESSING";
     this.currentErrorMessage = null;
   }
@@ -133,12 +153,25 @@ export class WatermarkJob {
     this.currentStatus = "FAILED";
     this.currentErrorMessage = message.trim();
   }
+
+  retry(): void {
+    if (this.currentStatus !== "FAILED")
+      throw new Error("Chỉ job thất bại mới có thể thử lại");
+    this.currentStatus = "PENDING";
+    this.currentErrorMessage = null;
+  }
+
+  cancel(): void {
+    if (this.currentStatus !== "PENDING")
+      throw new Error("Chỉ job đang chờ mới có thể hủy");
+    this.currentStatus = "CANCELLED";
+    this.currentErrorMessage = null;
+  }
 }
 
-function isHttpUrl(value: string): boolean {
+function isHttpsUrl(value: string): boolean {
   try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
+    return new URL(value).protocol === "https:";
   } catch {
     return false;
   }

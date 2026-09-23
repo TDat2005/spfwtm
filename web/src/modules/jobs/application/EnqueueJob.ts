@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BackgroundJob } from "../domain/BackgroundJob.ts";
-import type { JobQueue } from "./JobQueue.ts";
+import type { JobPublisher } from "./JobQueue.ts";
 
 export interface EnqueueJobInput {
   jobType: string;
@@ -9,7 +9,7 @@ export interface EnqueueJobInput {
 }
 
 export class EnqueueJob {
-  constructor(private readonly queue: JobQueue) {}
+  constructor(private readonly queue: JobPublisher) {}
 
   async execute(input: EnqueueJobInput): Promise<BackgroundJob> {
     const job = new BackgroundJob({

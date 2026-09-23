@@ -1,4 +1,7 @@
-import type { WatermarkJob } from "../domain/WatermarkJob.ts";
+import type {
+  WatermarkConfiguration,
+  WatermarkJob,
+} from "../domain/WatermarkJob.ts";
 
 export interface WatermarkJobRepository {
   save(job: WatermarkJob): Promise<void>;
@@ -13,17 +16,13 @@ export interface ProductImageReader {
 export interface WatermarkProcessor {
   applyText(input: {
     source: Buffer;
-    text: string;
-    position: WatermarkJob["position"];
-    opacity: number;
+    configuration: WatermarkConfiguration;
   }): Promise<{ bytes: Buffer; mimeType: string }>;
 
   applyImage(input: {
     source: Buffer;
     logo: Buffer;
-    position: WatermarkJob["position"];
-    opacity: number;
-    scale: number;
+    configuration: WatermarkConfiguration;
   }): Promise<{ bytes: Buffer; mimeType: string }>;
 }
 

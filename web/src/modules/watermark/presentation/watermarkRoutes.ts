@@ -4,10 +4,14 @@ import type { Session } from "@shopify/shopify-api";
 import type { CreateWatermarkJob } from "../application/CreateWatermarkJob.ts";
 import type { ListWatermarkJobs } from "../application/ListWatermarkJobs.ts";
 import type { ProcessWatermarkJob } from "../application/ProcessWatermarkJob.ts";
+import type { GetWatermarkJob } from "../application/GetWatermarkJob.ts";
+import type { RetryWatermarkJob } from "../application/RetryWatermarkJob.ts";
+import type { CancelWatermarkJob } from "../application/CancelWatermarkJob.ts";
 import type { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
-import type { WatermarkWorker } from "../../jobs/infrastructure/WatermarkWorker.ts";
 import type {
   WatermarkJob,
+  WatermarkFontFamily,
+  WatermarkLayout,
   WatermarkPosition,
 } from "../domain/WatermarkJob.ts";
 
@@ -15,19 +19,26 @@ interface Dependencies {
   createWatermarkJob: CreateWatermarkJob;
   listWatermarkJobs: ListWatermarkJobs;
   processWatermarkJob: ProcessWatermarkJob;
+  getWatermarkJob: GetWatermarkJob;
+  retryWatermarkJob: RetryWatermarkJob;
+  cancelWatermarkJob: CancelWatermarkJob;
   enqueueJob?: EnqueueJob;
-  worker?: WatermarkWorker;
 }
 interface ShopifyLocals extends Record<string, unknown> {
   shopify: { session: Session };
 }
 const positions = new Set<WatermarkPosition>([
   "TOP_LEFT",
+  "TOP_CENTER",
   "TOP_RIGHT",
+  "MIDDLE_LEFT",
   "CENTER",
+  "MIDDLE_RIGHT",
   "BOTTOM_LEFT",
+  "BOTTOM_CENTER",
   "BOTTOM_RIGHT",
 ]);
+const layouts = new Set<WatermarkLayout>(["SINGLE", "TILED"]);
 
 export function createWatermarkRouter(dependencies: Dependencies) {
   const router = express.Router();
@@ -56,6 +67,8 @@ export function createWatermarkRouter(dependencies: Dependencies) {
         ) as WatermarkPosition;
         if (!positions.has(position))
           throw new Error("Vị trí watermark không hợp lệ");
+        const layout = String(body.layout ?? "SINGLE") as WatermarkLayout;
+        if (!layouts.has(layout)) throw new Error("Kiểu bố trí watermark không hợp lệ");
         const job = await dependencies.createWatermarkJob.execute({
           shopDomain: response.locals.shopify.session.shop,
           productId: String(body.productId ?? ""),
@@ -65,6 +78,15 @@ export function createWatermarkRouter(dependencies: Dependencies) {
           logoScale: Number(body.logoScale ?? 0.2),
           position,
           opacity: Number(body.opacity ?? 0.7),
+          layout,
+          rotation: Number(body.rotation ?? 0),
+          offsetX: Number(body.offsetX ?? 0),
+          offsetY: Number(body.offsetY ?? 0),
+          fontFamily: String(body.fontFamily ?? "Arial") as WatermarkFontFamily,
+          fontSize: Number(body.fontSize ?? 0.045),
+          textColor: String(body.textColor ?? "#FFFFFF"),
+          strokeColor: String(body.strokeColor ?? "#000000"),
+          strokeWidth: Number(body.strokeWidth ?? 2),
         });
 
         if (dependencies.enqueueJob) {
@@ -75,10 +97,61 @@ export function createWatermarkRouter(dependencies: Dependencies) {
               shopDomain: response.locals.shopify.session.shop,
             },
           });
-          dependencies.worker?.trigger();
         }
 
         response.status(201).send({ job: toResponse(job) });
+      } catch (error) {
+        sendError(response, error, 400);
+      }
+    }
+  );
+
+  router.get(
+    "/jobs/:id",
+    async (request: Request, response: Response<unknown, ShopifyLocals>) => {
+      try {
+        const job = await dependencies.getWatermarkJob.execute(
+          parameter(request.params.id),
+          response.locals.shopify.session.shop
+        );
+        response.status(200).send({ job: toResponse(job) });
+      } catch (error) {
+        sendError(response, error, 404);
+      }
+    }
+  );
+
+  router.post(
+    "/jobs/:id/retry",
+    async (request: Request, response: Response<unknown, ShopifyLocals>) => {
+      try {
+        const shopDomain = response.locals.shopify.session.shop;
+        const job = await dependencies.retryWatermarkJob.execute(
+          parameter(request.params.id),
+          shopDomain
+        );
+        if (dependencies.enqueueJob) {
+          await dependencies.enqueueJob.execute({
+            jobType: "WATERMARK_PROCESS",
+            payload: { jobId: job.id, shopDomain },
+          });
+        }
+        response.status(202).send({ job: toResponse(job) });
+      } catch (error) {
+        sendError(response, error, 400);
+      }
+    }
+  );
+
+  router.post(
+    "/jobs/:id/cancel",
+    async (request: Request, response: Response<unknown, ShopifyLocals>) => {
+      try {
+        const job = await dependencies.cancelWatermarkJob.execute(
+          parameter(request.params.id),
+          response.locals.shopify.session.shop
+        );
+        response.status(200).send({ job: toResponse(job) });
       } catch (error) {
         sendError(response, error, 400);
       }
@@ -89,9 +162,7 @@ export function createWatermarkRouter(dependencies: Dependencies) {
     "/jobs/:id/process",
     async (request: Request, response: Response<unknown, ShopifyLocals>) => {
       try {
-        const id = Array.isArray(request.params.id)
-          ? request.params.id[0] ?? ""
-          : request.params.id ?? "";
+        const id = parameter(request.params.id);
         const job = await dependencies.processWatermarkJob.execute(
           id,
           response.locals.shopify.session.shop
@@ -115,6 +186,15 @@ function toResponse(job: WatermarkJob) {
     logoScale: job.logoScale,
     position: job.position,
     opacity: job.opacity,
+    layout: job.layout,
+    rotation: job.rotation,
+    offsetX: job.offsetX,
+    offsetY: job.offsetY,
+    fontFamily: job.fontFamily,
+    fontSize: job.fontSize,
+    textColor: job.textColor,
+    strokeColor: job.strokeColor,
+    strokeWidth: job.strokeWidth,
     status: job.status,
     resultMediaId: job.resultMediaId,
     resultUrl: job.resultMediaId
@@ -123,6 +203,10 @@ function toResponse(job: WatermarkJob) {
     errorMessage: job.errorMessage,
     createdAt: job.createdAt,
   };
+}
+
+function parameter(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
 function sendError(response: Response, error: unknown, status = 500): void {

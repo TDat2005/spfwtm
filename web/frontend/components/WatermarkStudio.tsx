@@ -32,12 +32,21 @@ interface CatalogResponse {
 
 type WatermarkPosition =
   | "TOP_LEFT"
+  | "TOP_CENTER"
   | "TOP_RIGHT"
+  | "MIDDLE_LEFT"
   | "CENTER"
+  | "MIDDLE_RIGHT"
   | "BOTTOM_LEFT"
+  | "BOTTOM_CENTER"
   | "BOTTOM_RIGHT";
 
-type WatermarkJobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+type WatermarkJobStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
 
 interface WatermarkJobDto {
   id: string;
@@ -48,6 +57,15 @@ interface WatermarkJobDto {
   logoScale?: number;
   position: WatermarkPosition;
   opacity: number;
+  layout: "SINGLE" | "TILED";
+  rotation: number;
+  offsetX: number;
+  offsetY: number;
+  fontFamily: string;
+  fontSize: number;
+  textColor: string;
+  strokeColor: string;
+  strokeWidth: number;
   status: WatermarkJobStatus;
   resultMediaId: string | null;
   resultUrl: string | null;
@@ -82,11 +100,19 @@ interface PublicationResponse {
 
 const positionOptions = [
   { label: "Góc trên bên trái", value: "TOP_LEFT" },
+  { label: "Phía trên chính giữa", value: "TOP_CENTER" },
   { label: "Góc trên bên phải", value: "TOP_RIGHT" },
+  { label: "Chính giữa bên trái", value: "MIDDLE_LEFT" },
   { label: "Chính giữa", value: "CENTER" },
+  { label: "Chính giữa bên phải", value: "MIDDLE_RIGHT" },
   { label: "Góc dưới bên trái", value: "BOTTOM_LEFT" },
+  { label: "Phía dưới chính giữa", value: "BOTTOM_CENTER" },
   { label: "Góc dưới bên phải", value: "BOTTOM_RIGHT" },
 ];
+
+const fontOptions = ["Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New"].map(
+  (font) => ({ label: font, value: font })
+);
 
 export function WatermarkStudio() {
   const shopify = useAppBridge();
@@ -99,7 +125,17 @@ export function WatermarkStudio() {
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [position, setPosition] = useState<WatermarkPosition>("BOTTOM_RIGHT");
   const [opacityPercent, setOpacityPercent] = useState(70);
+  const [layout, setLayout] = useState<"SINGLE" | "TILED">("SINGLE");
+  const [rotation, setRotation] = useState(0);
+  const [offsetXPercent, setOffsetXPercent] = useState(0);
+  const [offsetYPercent, setOffsetYPercent] = useState(0);
+  const [fontFamily, setFontFamily] = useState("Arial");
+  const [fontSizePercent, setFontSizePercent] = useState(4.5);
+  const [textColor, setTextColor] = useState("#FFFFFF");
+  const [strokeColor, setStrokeColor] = useState("#000000");
+  const [strokeWidth, setStrokeWidth] = useState(2);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
   const catalog = useQuery<CatalogResponse, Error>(
     ["catalogProducts"],
@@ -115,7 +151,7 @@ export function WatermarkStudio() {
         const hasPending = data?.jobs.some(
           (j) => j.status === "PENDING" || j.status === "PROCESSING"
         );
-        return hasPending ? 1500 : false;
+        return hasPending ? 1000 : false;
       },
       refetchOnWindowFocus: false,
     }
@@ -135,6 +171,39 @@ export function WatermarkStudio() {
   useEffect(() => {
     if (!productId && products[0]) setProductId(products[0].id);
   }, [productId, products]);
+
+  useEffect(() => {
+    if (!activeJobId) {
+      if (!previewPath) {
+        const firstCompleted = jobs.data?.jobs.find(
+          (j) => j.status === "COMPLETED" && j.resultUrl
+        );
+        if (firstCompleted?.resultUrl) {
+          setPreviewPath(firstCompleted.resultUrl);
+        }
+      }
+      return;
+    }
+
+    const targetJob = jobs.data?.jobs.find((j) => j.id === activeJobId);
+    if (!targetJob) return;
+
+    if (targetJob.status === "COMPLETED" && targetJob.resultUrl) {
+      setPreviewPath(targetJob.resultUrl);
+      shopify.toast.show("Đã xử lý xong ảnh watermark");
+      setActiveJobId(null);
+    } else if (targetJob.status === "FAILED") {
+      shopify.toast.show(
+        `Xử lý watermark thất bại: ${
+          targetJob.errorMessage ?? "Lỗi không xác định"
+        }`,
+        { isError: true }
+      );
+      setActiveJobId(null);
+    } else if (targetJob.status === "CANCELLED") {
+      setActiveJobId(null);
+    }
+  }, [jobs.data, activeJobId, previewPath]);
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -178,9 +247,18 @@ export function WatermarkStudio() {
         watermarkType,
         position,
         opacity: opacityPercent / 100,
+        layout,
+        rotation,
+        offsetX: offsetXPercent / 100,
+        offsetY: offsetYPercent / 100,
       };
       if (watermarkType === "TEXT") {
         payload.text = text;
+        payload.fontFamily = fontFamily;
+        payload.fontSize = fontSizePercent / 100;
+        payload.textColor = textColor;
+        payload.strokeColor = strokeColor;
+        payload.strokeWidth = strokeWidth;
       } else {
         payload.logoUrl = logoUrl;
         payload.logoScale = logoScalePercent / 100;
@@ -191,17 +269,15 @@ export function WatermarkStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      return (
-        await fetchJson<JobResponse>(
-          `/api/watermarks/jobs/${encodeURIComponent(created.job.id)}/process`,
-          { method: "POST" }
-        )
-      ).job;
+      return created.job;
     },
     {
       onSuccess: (job) => {
-        setPreviewPath(job.resultUrl);
-        shopify.toast.show("Đã tạo ảnh watermark thành công");
+        setActiveJobId(job.id);
+        if (job.resultUrl) {
+          setPreviewPath(job.resultUrl);
+        }
+        shopify.toast.show("Đã tạo yêu cầu, đang xử lý watermark ngầm...");
       },
       onError: (error) => {
         shopify.toast.show(`Không tạo được watermark: ${error.message}`, {
@@ -214,21 +290,44 @@ export function WatermarkStudio() {
     }
   );
 
-  const processExisting = useMutation<WatermarkJobDto, Error>(
+  const retryJob = useMutation<WatermarkJobDto, Error, string>(
     async (jobId: string) =>
       (
         await fetchJson<JobResponse>(
-          `/api/watermarks/jobs/${encodeURIComponent(jobId)}/process`,
+          `/api/watermarks/jobs/${encodeURIComponent(jobId)}/retry`,
           { method: "POST" }
         )
       ).job,
     {
       onSuccess: (job) => {
-        setPreviewPath(job.resultUrl);
-        shopify.toast.show("Đã xử lý lại watermark");
+        setActiveJobId(job.id);
+        shopify.toast.show("Đã đưa job trở lại hàng đợi");
       },
       onError: (error) => {
         shopify.toast.show(`Xử lý lại thất bại: ${error.message}`, {
+          isError: true,
+        });
+      },
+      onSettled: async () => {
+        await queryClient.invalidateQueries(["watermarkJobs"]);
+      },
+    }
+  );
+
+  const cancelJob = useMutation<WatermarkJobDto, Error, string>(
+    async (jobId: string) =>
+      (
+        await fetchJson<JobResponse>(
+          `/api/watermarks/jobs/${encodeURIComponent(jobId)}/cancel`,
+          { method: "POST" }
+        )
+      ).job,
+    {
+      onSuccess: () => {
+        shopify.toast.show("Đã hủy watermark job");
+      },
+      onError: (error) => {
+        shopify.toast.show(`Không hủy được job: ${error.message}`, {
           isError: true,
         });
       },
@@ -360,12 +459,24 @@ export function WatermarkStudio() {
         key={`${job.id}-retry`}
         plain
         loading={
-          processExisting.isLoading && processExisting.variables === job.id
+          retryJob.isLoading && retryJob.variables === job.id
         }
-        onClick={() => processExisting.mutate(job.id)}
+        onClick={() => retryJob.mutate(job.id)}
       >
         Thử lại
       </Button>
+    ) : job.status === "PENDING" ? (
+      <Button
+        key={`${job.id}-cancel`}
+        plain
+        destructive
+        loading={cancelJob.isLoading && cancelJob.variables === job.id}
+        onClick={() => cancelJob.mutate(job.id)}
+      >
+        Hủy
+      </Button>
+    ) : job.status === "CANCELLED" ? (
+      <Text as="span" variant="bodySm">Đã hủy</Text>
     ) : (
       <Stack spacing="extraTight" alignment="center">
         <Spinner size="small" />
@@ -420,14 +531,58 @@ export function WatermarkStudio() {
                 onChange={(value) => setWatermarkType(value as "TEXT" | "IMAGE")}
               />
               {watermarkType === "TEXT" ? (
-                <TextField
-                  label="Nội dung watermark"
-                  value={text}
-                  maxLength={100}
-                  autoComplete="off"
-                  showCharacterCount
-                  onChange={setText}
-                />
+                <Stack vertical spacing="tight">
+                  <TextField
+                    label="Nội dung watermark"
+                    value={text}
+                    maxLength={100}
+                    autoComplete="off"
+                    showCharacterCount
+                    onChange={setText}
+                  />
+                  <Select
+                    label="Font chữ"
+                    options={fontOptions}
+                    value={fontFamily}
+                    onChange={setFontFamily}
+                  />
+                  <TextField
+                    label="Màu chữ"
+                    value={textColor}
+                    autoComplete="off"
+                    helpText="Định dạng màu #RRGGBB, ví dụ #FFFFFF"
+                    onChange={setTextColor}
+                  />
+                  <TextField
+                    label="Màu viền"
+                    value={strokeColor}
+                    autoComplete="off"
+                    helpText="Định dạng màu #RRGGBB, ví dụ #000000"
+                    onChange={setStrokeColor}
+                  />
+                  <RangeSlider
+                    label={`Kích thước chữ: ${fontSizePercent}% chiều rộng ảnh`}
+                    min={1}
+                    max={20}
+                    step={0.5}
+                    value={fontSizePercent}
+                    output
+                    onChange={(value) =>
+                      setFontSizePercent(Array.isArray(value) ? value[0] : value)
+                    }
+                  />
+                  <RangeSlider
+                    label={`Độ dày viền: ${strokeWidth}px`}
+                    min={0}
+                    max={10}
+                    step={1}
+                    value={strokeWidth}
+                    output
+                    onChange={(value) =>
+                      setStrokeWidth(Array.isArray(value) ? value[0] : value)
+                    }
+                  />
+                </Stack>
               ) : (
                 <Stack vertical spacing="tight">
                   <TextField
@@ -471,6 +626,15 @@ export function WatermarkStudio() {
                 </Stack>
               )}
               <Select
+                label="Cách bố trí"
+                options={[
+                  { label: "Một watermark", value: "SINGLE" },
+                  { label: "Lặp trên toàn ảnh", value: "TILED" },
+                ]}
+                value={layout}
+                onChange={(value) => setLayout(value as "SINGLE" | "TILED")}
+              />
+              <Select
                 label="Vị trí"
                 options={positionOptions}
                 value={position}
@@ -485,6 +649,39 @@ export function WatermarkStudio() {
                 output
                 onChange={(value) =>
                   setOpacityPercent(Array.isArray(value) ? value[0] : value)
+                }
+              />
+              <RangeSlider
+                label={`Góc xoay: ${rotation}°`}
+                min={-180}
+                max={180}
+                step={15}
+                value={rotation}
+                output
+                onChange={(value) =>
+                  setRotation(Array.isArray(value) ? value[0] : value)
+                }
+              />
+              <RangeSlider
+                label={`Dịch ngang: ${offsetXPercent}%`}
+                min={-50}
+                max={50}
+                step={5}
+                value={offsetXPercent}
+                output
+                onChange={(value) =>
+                  setOffsetXPercent(Array.isArray(value) ? value[0] : value)
+                }
+              />
+              <RangeSlider
+                label={`Dịch dọc: ${offsetYPercent}%`}
+                min={-50}
+                max={50}
+                step={5}
+                value={offsetYPercent}
+                output
+                onChange={(value) =>
+                  setOffsetYPercent(Array.isArray(value) ? value[0] : value)
                 }
               />
               <Button
@@ -652,6 +849,7 @@ function statusLabel(status: WatermarkJobStatus): string {
     PROCESSING: "Đang xử lý",
     COMPLETED: "Hoàn thành",
     FAILED: "Thất bại",
+    CANCELLED: "Đã hủy",
   }[status];
 }
 
@@ -663,5 +861,6 @@ function badgeStatus(
     PROCESSING: "info",
     COMPLETED: "success",
     FAILED: "critical",
+    CANCELLED: "info",
   }[status] as "success" | "attention" | "critical" | "info";
 }

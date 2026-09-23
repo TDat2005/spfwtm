@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   WatermarkJob,
+  type WatermarkFontFamily,
+  type WatermarkLayout,
   type WatermarkPosition,
 } from "../domain/WatermarkJob.ts";
 import type {
@@ -17,6 +19,15 @@ export interface CreateWatermarkJobInput {
   logoScale?: number;
   position: WatermarkPosition;
   opacity: number;
+  layout?: WatermarkLayout;
+  rotation?: number;
+  offsetX?: number;
+  offsetY?: number;
+  fontFamily?: WatermarkFontFamily;
+  fontSize?: number;
+  textColor?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
 }
 
 export class CreateWatermarkJob {
@@ -38,12 +49,23 @@ export class CreateWatermarkJob {
       shopDomain: input.shopDomain,
       productId: input.productId,
       sourceImageUrl: imageUrl,
-      watermarkType: input.watermarkType,
-      text: input.text,
-      logoUrl: input.logoUrl,
-      logoScale: input.logoScale,
-      position: input.position,
-      opacity: input.opacity,
+      configuration: {
+        type: input.watermarkType,
+        text: input.text,
+        logoUrl: input.logoUrl,
+        logoScale: input.logoScale,
+        position: input.position,
+        opacity: input.opacity,
+        layout: input.layout,
+        rotation: input.rotation,
+        offsetX: input.offsetX,
+        offsetY: input.offsetY,
+        fontFamily: input.fontFamily,
+        fontSize: input.fontSize,
+        textColor: input.textColor,
+        strokeColor: input.strokeColor,
+        strokeWidth: input.strokeWidth,
+      },
     });
     await this.repository.save(job);
     return job;

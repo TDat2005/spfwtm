@@ -4,6 +4,11 @@ import type {
   WatermarkProcessor,
 } from "./WatermarkPorts.ts";
 
+interface ProcessWatermarkJobOptions {
+  /** BullMQ dùng cờ này khi chạy lại một job bị stalled giữa chừng. */
+  resumeProcessing?: boolean;
+}
+
 export class ProcessWatermarkJob {
   constructor(
     private readonly repository: WatermarkJobRepository,
@@ -11,12 +16,32 @@ export class ProcessWatermarkJob {
     private readonly processor: WatermarkProcessor
   ) {}
 
-  async execute(jobId: string, shopDomain: string) {
+  async execute(
+    jobId: string,
+    shopDomain: string,
+    options: ProcessWatermarkJobOptions = {}
+  ) {
     const job = await this.repository.findByIdForShop(jobId, shopDomain);
     if (!job) throw new Error("Không tìm thấy watermark job");
 
-    job.start();
-    await this.repository.save(job);
+    if (
+      job.status === "COMPLETED" ||
+      job.status === "CANCELLED" ||
+      (job.status === "PROCESSING" && !options.resumeProcessing)
+    ) {
+      return job;
+    }
+
+    // Background queue có thể gọi lại sau lỗi tạm thời. Aggregate phải đi qua
+    // transition FAILED -> PENDING trước khi được xử lý lại.
+    if (job.status === "FAILED") job.retry();
+
+    // Lần chạy bình thường đi PENDING -> PROCESSING. Khi BullMQ phục hồi một
+    // job stalled, aggregate đã là PROCESSING nên tiếp tục công việc idempotent.
+    if (job.status === "PENDING") {
+      job.start();
+      await this.repository.save(job);
+    }
 
     try {
       const source = await this.media.importSource(
@@ -34,16 +59,12 @@ export class ProcessWatermarkJob {
         result = await this.processor.applyImage({
           source,
           logo,
-          position: job.position,
-          opacity: job.opacity,
-          scale: job.logoScale,
+          configuration: job.configuration,
         });
       } else {
         result = await this.processor.applyText({
           source,
-          text: job.text ?? "",
-          position: job.position,
-          opacity: job.opacity,
+          configuration: job.configuration,
         });
       }
 

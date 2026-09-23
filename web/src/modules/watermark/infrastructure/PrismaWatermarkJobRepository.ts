@@ -28,6 +28,15 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
         logoScale: job.logoScale,
         position: job.position,
         opacity: job.opacity,
+        layout: job.layout,
+        rotation: job.rotation,
+        offsetX: job.offsetX,
+        offsetY: job.offsetY,
+        fontFamily: job.fontFamily,
+        fontSize: job.fontSize,
+        textColor: job.textColor,
+        strokeColor: job.strokeColor,
+        strokeWidth: job.strokeWidth,
         status: job.status,
         resultMediaId: job.resultMediaId,
         errorMessage: job.errorMessage,
@@ -70,12 +79,25 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
     logoScale: number;
     position:
       | "TOP_LEFT"
+      | "TOP_CENTER"
       | "TOP_RIGHT"
+      | "MIDDLE_LEFT"
       | "CENTER"
+      | "MIDDLE_RIGHT"
       | "BOTTOM_LEFT"
+      | "BOTTOM_CENTER"
       | "BOTTOM_RIGHT";
     opacity: number;
-    status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+    layout: "SINGLE" | "TILED";
+    rotation: number;
+    offsetX: number;
+    offsetY: number;
+    fontFamily: string;
+    fontSize: number;
+    textColor: string;
+    strokeColor: string;
+    strokeWidth: number;
+    status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "CANCELLED";
     resultMediaId: string | null;
     errorMessage: string | null;
     createdAt: Date;
@@ -87,12 +109,28 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
       shopDomain: row.shop.domain,
       productId: row.product.shopifyProductId,
       sourceImageUrl: row.sourceImageUrl,
-      watermarkType: row.watermarkType,
-      text: row.text,
-      logoUrl: row.logoUrl,
-      logoScale: row.logoScale,
-      position: row.position,
-      opacity: row.opacity,
+      configuration: {
+        type: row.watermarkType,
+        text: row.text,
+        logoUrl: row.logoUrl,
+        logoScale: row.logoScale,
+        position: row.position,
+        opacity: row.opacity,
+        layout: row.layout,
+        rotation: row.rotation,
+        offsetX: row.offsetX,
+        offsetY: row.offsetY,
+        fontFamily: row.fontFamily as
+          | "Arial"
+          | "Helvetica"
+          | "Georgia"
+          | "Times New Roman"
+          | "Courier New",
+        fontSize: row.fontSize,
+        textColor: row.textColor,
+        strokeColor: row.strokeColor,
+        strokeWidth: row.strokeWidth,
+      },
       status: row.status,
       resultMediaId: row.resultMediaId,
       errorMessage: row.errorMessage,

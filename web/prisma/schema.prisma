@@ -81,14 +81,24 @@ enum WatermarkJobStatus {
   PROCESSING
   COMPLETED
   FAILED
+  CANCELLED
 }
 
 enum WatermarkPosition {
   TOP_LEFT
+  TOP_CENTER
   TOP_RIGHT
+  MIDDLE_LEFT
   CENTER
+  MIDDLE_RIGHT
   BOTTOM_LEFT
+  BOTTOM_CENTER
   BOTTOM_RIGHT
+}
+
+enum WatermarkLayout {
+  SINGLE
+  TILED
 }
 
 enum WatermarkType {
@@ -107,6 +117,15 @@ model WatermarkJob {
   logoScale        Float              @default(0.2)
   position         WatermarkPosition
   opacity          Float
+  layout           WatermarkLayout    @default(SINGLE)
+  rotation         Float              @default(0)
+  offsetX          Float              @default(0)
+  offsetY          Float              @default(0)
+  fontFamily       String             @default("Arial") @db.VarChar(50)
+  fontSize         Float              @default(0.045)
+  textColor        String             @default("#FFFFFF") @db.Char(7)
+  strokeColor      String             @default("#000000") @db.Char(7)
+  strokeWidth      Float              @default(2)
   status           WatermarkJobStatus @default(PENDING)
   resultMediaId    String?            @db.VarChar(36)
   errorMessage     String?            @db.Text

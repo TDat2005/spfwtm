@@ -32,19 +32,14 @@ export class DatabaseJobQueue implements JobQueue {
 
     if (!candidate) return null;
 
-    const result = await this.prisma.backgroundJob.updateMany({
-      where: {
-        id: candidate.id,
-        status: "PENDING",
-      },
+    await this.prisma.backgroundJob.update({
+      where: { id: candidate.id },
       data: {
         status: "PROCESSING",
-        attempts: { increment: 1 },
+        attempts: candidate.attempts + 1,
         updatedAt: new Date(),
       },
     });
-
-    if (result.count === 0) return null;
 
     return new BackgroundJob({
       id: candidate.id,
