@@ -20,9 +20,9 @@ export class RunPendingJobs {
     const job = await this.queue.acquireNext(jobTypes);
     if (!job) return false;
 
-    const handler = this.handlers.get(job.jobType);
+    const handler = this.handlers.get(job.jobName);
     if (!handler) {
-      job.fail(`Không tìm thấy handler cho jobType ${job.jobType}`);
+      job.fail(`Không tìm thấy handler cho jobType ${job.jobName}`);
       await this.queue.save(job);
       return true;
     }

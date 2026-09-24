@@ -27,6 +27,7 @@ interface ShopifyProductNode {
   title: string;
   status: string;
   featuredMedia: {
+    id: string;
     preview: {
       image: {
         url: string;
@@ -61,6 +62,7 @@ export class ShopifyProductGateway implements ProductGateway {
             title
             status
             featuredMedia {
+              id
               preview {
                 image {
                   url
@@ -84,6 +86,7 @@ export class ShopifyProductGateway implements ProductGateway {
         status: parseProductStatus(node.status),
         imageUrl: image?.url ?? null,
         imageAltText: image?.altText ?? null,
+        mediaId: node.featuredMedia?.id ?? null,
       });
     });
   }

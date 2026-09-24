@@ -3,13 +3,14 @@ import { ShopifyProductGateway } from "./src/modules/catalog/infrastructure/Shop
 import { createCatalogRouter } from "./src/modules/catalog/presentation/catalogRoutes.ts";
 import { join } from "path";
 import { readFileSync } from "fs";
+import { createHash } from "node:crypto";
 import express from "express";
 import { SyncCatalog } from "./src/modules/catalog/application/SyncCatalog.ts";
 import { PrismaProductRepository } from "./src/modules/catalog/infrastructure/PrismaProductRepository.ts";
 import { prisma } from "./src/shared/infrastructure/prisma.ts";
 import serveStatic from "serve-static";
 import type { Session } from "@shopify/shopify-api";
-import shopify from "./shopify.js";
+import shopify, { SHOPIFY_API_VERSION } from "./shopify.js";
 import productCreator from "./product-creator.js";
 import PrivacyWebhookHandlers from "./privacy.js";
 import { MediaService } from "./src/modules/media/application/MediaService.ts";
@@ -40,6 +41,19 @@ import { EnqueueJob } from "./src/modules/jobs/application/EnqueueJob.ts";
 import { BullMqJobQueue } from "./src/modules/jobs/infrastructure/BullMqJobQueue.ts";
 import { BullMqWorker } from "./src/modules/jobs/infrastructure/BullMqWorker.ts";
 import { redisRuntimeConfigFromEnv } from "./src/modules/jobs/infrastructure/RedisConnection.ts";
+import {
+  PRODUCT_MEDIA_RECONCILE_V1,
+  CATALOG_RECONCILE_V1,
+  WATERMARK_PROCESS_V1,
+  assertJobVersion,
+} from "./src/modules/jobs/domain/JobDefinitions.ts";
+import { ReceiveProductWebhook } from "./src/modules/product-media-sync/application/ReceiveProductWebhook.ts";
+import { ReconcileProductMedia } from "./src/modules/product-media-sync/application/ReconcileProductMedia.ts";
+import { BullMqProductReconcileQueue } from "./src/modules/product-media-sync/infrastructure/BullMqProductReconcileQueue.ts";
+import { PrismaPublicationAttemptRepository } from "./src/modules/product-media-sync/infrastructure/PrismaPublicationAttemptRepository.ts";
+import { PrismaWebhookInboxRepository } from "./src/modules/product-media-sync/infrastructure/PrismaWebhookInboxRepository.ts";
+import { createProductWebhookHandlers } from "./src/modules/product-media-sync/infrastructure/ProductWebhookHandlers.ts";
+import { ShopifyProductMediaGateway } from "./src/modules/product-media-sync/infrastructure/ShopifyProductMediaGateway.ts";
 const PORT = parseInt(
   process.env.BACKEND_PORT || process.env.PORT || "3000",
   10
@@ -98,22 +112,101 @@ const jobQueue = new BullMqJobQueue({
   prefix: redisConfig.prefix,
 });
 const enqueueJob = new EnqueueJob(jobQueue);
-const watermarkWorker = new BullMqWorker({
+const backgroundWorker = new BullMqWorker({
   queueName: redisConfig.queueName,
   connection: redisConfig.workerConnection,
   concurrency: redisConfig.concurrency,
   prefix: redisConfig.prefix,
 });
+const webhookInboxRepository = new PrismaWebhookInboxRepository(prisma);
+const publicationAttemptRepository =
+  new PrismaPublicationAttemptRepository(prisma);
+const receiveProductWebhook = new ReceiveProductWebhook(
+  webhookInboxRepository,
+  new BullMqProductReconcileQueue(enqueueJob)
+);
 
-watermarkWorker.registerHandler("WATERMARK_PROCESS", async (payload) => {
+async function processWatermarkPayload(payload: Record<string, unknown>) {
   const jobId = String(payload.jobId);
   const shopDomain = String(payload.shopDomain);
   await processWatermarkJob.execute(jobId, shopDomain, {
     resumeProcessing: true,
   });
+}
+
+backgroundWorker.registerHandler(WATERMARK_PROCESS_V1.jobName, async (payload) => {
+  assertJobVersion(payload, WATERMARK_PROCESS_V1);
+  await processWatermarkPayload(payload);
 });
 
-watermarkWorker.start();
+// Tương thích với job đã nằm trong queue trước khi tên V1 được triển khai.
+backgroundWorker.registerHandler("WATERMARK_PROCESS", processWatermarkPayload);
+
+backgroundWorker.registerHandler(
+  PRODUCT_MEDIA_RECONCILE_V1.jobName,
+  async (payload) => {
+    assertJobVersion(payload, PRODUCT_MEDIA_RECONCILE_V1);
+    const webhookId = String(payload.webhookId ?? "");
+    const shopDomain = String(payload.shopDomain ?? "");
+    if (!webhookId || !shopDomain) {
+      throw new Error("PRODUCT_MEDIA_RECONCILE_V1 thiếu webhookId hoặc shopDomain");
+    }
+
+    const offlineSessionId = shopify.api.session.getOfflineId(shopDomain);
+    const session = await shopify.config.sessionStorage.loadSession(
+      offlineSessionId
+    );
+    if (!session) {
+      throw new Error(`Không tìm thấy offline session cho ${shopDomain}`);
+    }
+
+    const reconcile = new ReconcileProductMedia(
+      webhookInboxRepository,
+      new ShopifyProductMediaGateway(shopify, session)
+    );
+    await reconcile.execute(webhookId);
+  }
+);
+
+backgroundWorker.registerHandler(CATALOG_RECONCILE_V1.jobName, async (payload) => {
+  assertJobVersion(payload, CATALOG_RECONCILE_V1);
+  const changedSince = new Date(Date.now() - 48 * 60 * 60 * 1000);
+  const candidates =
+    await webhookInboxRepository.listReconciliationCandidates(changedSince);
+  const day = new Date().toISOString().slice(0, 10);
+
+  for (const candidate of candidates) {
+    const key = createHash("sha256")
+      .update(`${candidate.shopDomain}\0${candidate.productId}`)
+      .digest("hex")
+      .slice(0, 32);
+    await receiveProductWebhook.execute({
+      webhookId: `catalog-reconcile-${day}-${key}`,
+      shopDomain: candidate.shopDomain,
+      topic: "CATALOG_RECONCILE",
+      apiVersion: SHOPIFY_API_VERSION,
+      body: JSON.stringify({
+        admin_graphql_api_id: candidate.productId,
+        updated_at: candidate.updatedAt.toISOString(),
+      }),
+    });
+  }
+});
+
+void jobQueue
+  .upsertDailyJob(
+    CATALOG_RECONCILE_V1,
+    process.env.CATALOG_RECONCILE_CRON || "0 3 * * *",
+    process.env.CATALOG_RECONCILE_TIMEZONE || "Asia/Ho_Chi_Minh"
+  )
+  .catch((error: unknown) => {
+    console.error(
+      "[BullMQ] Không thể đăng ký CATALOG_RECONCILE_V1:",
+      error instanceof Error ? error.message : error
+    );
+  });
+
+backgroundWorker.start();
 // Set up Shopify authentication and webhook handling
 app.get(shopify.config.auth.path, shopify.auth.begin());
 app.get(
@@ -123,7 +216,15 @@ app.get(
 );
 app.post(
   shopify.config.webhooks.path,
-  shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers })
+  shopify.processWebhooks({
+    webhookHandlers: {
+      ...PrivacyWebhookHandlers,
+      ...createProductWebhookHandlers(
+        receiveProductWebhook,
+        SHOPIFY_API_VERSION
+      ),
+    },
+  })
 );
 
 // If you are adding routes outside of the /api path, remember to
@@ -177,6 +278,7 @@ app.use(
         watermarkResultReader,
         shopifyMediaGateway,
         publishedMediaRepository,
+        publicationAttemptRepository,
       );
     },
 
@@ -261,7 +363,7 @@ async function shutdown(signal: string): Promise<void> {
 
   const results = await Promise.allSettled([
     closeHttpServer,
-    watermarkWorker.stop(),
+    backgroundWorker.stop(),
   ]);
   results.push(
     ...(await Promise.allSettled([jobQueue.close(), prisma.$disconnect()]))

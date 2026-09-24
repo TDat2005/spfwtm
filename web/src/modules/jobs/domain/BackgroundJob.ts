@@ -6,8 +6,11 @@ export type BackgroundJobStatus =
 
 export interface BackgroundJobProps {
   id: string;
-  jobType: string;
+  jobName: string;
   payload: Record<string, unknown>;
+  payloadVersion: number;
+  processorVersion: number;
+  delayMs?: number;
   status?: BackgroundJobStatus;
   attempts?: number;
   maxAttempts?: number;
@@ -18,8 +21,11 @@ export interface BackgroundJobProps {
 
 export class BackgroundJob {
   readonly id: string;
-  readonly jobType: string;
+  readonly jobName: string;
   readonly payload: Record<string, unknown>;
+  readonly payloadVersion: number;
+  readonly processorVersion: number;
+  readonly delayMs: number;
   readonly maxAttempts: number;
   readonly createdAt: Date;
   private currentStatus: BackgroundJobStatus;
@@ -29,11 +35,20 @@ export class BackgroundJob {
 
   constructor(props: BackgroundJobProps) {
     if (!props.id.trim()) throw new Error("Job ID không được để trống");
-    if (!props.jobType.trim()) throw new Error("Job type không được để trống");
+    if (!props.jobName.trim()) throw new Error("Job name không được để trống");
+    if (!Number.isInteger(props.payloadVersion) || props.payloadVersion < 1) {
+      throw new Error("Payload version phải là số nguyên dương");
+    }
+    if (!Number.isInteger(props.processorVersion) || props.processorVersion < 1) {
+      throw new Error("Processor version phải là số nguyên dương");
+    }
 
     this.id = props.id;
-    this.jobType = props.jobType;
+    this.jobName = props.jobName;
     this.payload = props.payload;
+    this.payloadVersion = props.payloadVersion;
+    this.processorVersion = props.processorVersion;
+    this.delayMs = Math.max(0, props.delayMs ?? 0);
     this.currentStatus = props.status ?? "PENDING";
     this.currentAttempts = props.attempts ?? 0;
     this.maxAttempts = props.maxAttempts ?? 3;

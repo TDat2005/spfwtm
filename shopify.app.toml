@@ -10,7 +10,15 @@ embedded = true
 scopes = "write_products,read_products"
 
 [webhooks]
-api_version = "2026-10"
+api_version = "2026-07"
+
+[[webhooks.subscriptions]]
+topics = ["products/update", "products/delete", "app/uninstalled", "bulk_operations/finish"]
+uri = "/api/webhooks"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "/api/webhooks"
 
 [auth]
 redirect_urls = ["https://example.com/api/auth"]

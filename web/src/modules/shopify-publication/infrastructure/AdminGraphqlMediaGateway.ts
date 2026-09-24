@@ -64,41 +64,13 @@ interface ProductUpdateResponse {
     }>;
   };
 }
-interface StagedUploadTarget {
-  url: string;
-  resourceUrl: string;
-  parameters: Array<{
-    name: string;
-    value: string;
-  }>;
-}
 
-interface StagedUploadResponse {
-  stagedUploadsCreate: {
-    stagedTargets: StagedUploadTarget[];
-    userErrors: Array<{
-      field: string[] | null;
-      message: string;
-    }>;
-  };
-}
-
-interface ProductUpdateResponse {
-  productUpdate: {
-    product: {
+interface ProductReorderMediaResponse {
+  productReorderMedia: {
+    job: {
       id: string;
-      media: {
-        nodes: Array<{
-          id: string;
-          status: string;
-          image?: {
-            url: string;
-          } | null;
-        }>;
-      };
     } | null;
-
-    userErrors: Array<{
+    mediaUserErrors: Array<{
       field: string[] | null;
       message: string;
     }>;
@@ -119,7 +91,11 @@ export class AdminGraphqlMediaGateway implements ShopifyMediaGateway {
 
     await this.uploadToStagedTarget(stagedTarget, input);
 
-    return this.attachToProduct(client, stagedTarget.resourceUrl, input);
+    return this.attachToProduct(
+      client,
+      stagedTarget.resourceUrl,
+      input
+    );
   }
 
   private async createStagedUpload(
@@ -282,6 +258,56 @@ export class AdminGraphqlMediaGateway implements ShopifyMediaGateway {
       mediaId: media.id,
       imageUrl: media.image?.url ?? null,
     };
+  }
+
+  async promoteMedia(
+    productId: string,
+    mediaId: string
+  ): Promise<void> {
+    const client = new this.shopify.api.clients.Graphql({
+      session: this.session,
+    });
+
+    const result = await client.request<ProductReorderMediaResponse>(
+      `
+        mutation ReorderProductMedia(
+          $id: ID!
+          $moves: [MoveInput!]!
+        ) {
+          productReorderMedia(
+            id: $id
+            moves: $moves
+          ) {
+            job {
+              id
+            }
+            mediaUserErrors {
+              field
+              message
+            }
+          }
+        }
+      `,
+      {
+        variables: {
+          id: productId,
+          moves: [
+            {
+              id: mediaId,
+              newPosition: "0",
+            },
+          ],
+        },
+      }
+    );
+
+    if (!result.data) {
+      throw new Error("Shopify không trả về kết quả sắp xếp media");
+    }
+
+    throwOnUserErrors(
+      result.data.productReorderMedia.mediaUserErrors
+    );
   }
 
   async deleteMedia(productId: string, mediaIds: string[]): Promise<void> {

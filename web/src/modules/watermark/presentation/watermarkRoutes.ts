@@ -14,6 +14,7 @@ import type {
   WatermarkLayout,
   WatermarkPosition,
 } from "../domain/WatermarkJob.ts";
+import { WATERMARK_PROCESS_V1 } from "../../jobs/domain/JobDefinitions.ts";
 
 interface Dependencies {
   createWatermarkJob: CreateWatermarkJob;
@@ -91,7 +92,7 @@ export function createWatermarkRouter(dependencies: Dependencies) {
 
         if (dependencies.enqueueJob) {
           await dependencies.enqueueJob.execute({
-            jobType: "WATERMARK_PROCESS",
+            ...WATERMARK_PROCESS_V1,
             payload: {
               jobId: job.id,
               shopDomain: response.locals.shopify.session.shop,
@@ -132,7 +133,7 @@ export function createWatermarkRouter(dependencies: Dependencies) {
         );
         if (dependencies.enqueueJob) {
           await dependencies.enqueueJob.execute({
-            jobType: "WATERMARK_PROCESS",
+            ...WATERMARK_PROCESS_V1,
             payload: { jobId: job.id, shopDomain },
           });
         }

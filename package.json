@@ -6,10 +6,14 @@
   "scripts": {
     "shopify": "shopify",
     "build": "shopify app build",
+    "check:api-version": "node scripts/check-api-version.mjs",
+    "ci": "npm run check:api-version && npm --workspace shopify-app-template-node run prisma:generate && npm run typecheck && npm test",
     "dev": "shopify app dev",
     "info": "shopify app info",
     "generate": "shopify app generate",
-    "deploy": "shopify app deploy"
+    "deploy": "shopify app deploy",
+    "test": "npm --workspace shopify-app-template-node run test",
+    "typecheck": "npm --workspace shopify-app-template-node run typecheck"
   },
   "dependencies": {},
   "author": "tiend",

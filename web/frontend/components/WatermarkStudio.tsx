@@ -360,7 +360,9 @@ export function WatermarkStudio() {
       ).publishedMedia,
     {
       onSuccess: async () => {
-        shopify.toast.show("Đã đưa ảnh watermark lên Shopify");
+        shopify.toast.show(
+          "Đã đưa ảnh watermark lên vị trí ảnh chính của Shopify"
+        );
         await queryClient.invalidateQueries(["publishedMedia"]);
       },
       onError: (error) => {
@@ -427,13 +429,30 @@ export function WatermarkStudio() {
           <Stack spacing="extraTight">
             <Badge status="success">Đã lên Shopify</Badge>
             <Button
+              size="slim"
+              loading={
+                publishToShopify.isLoading &&
+                publishToShopify.variables?.id === job.id
+              }
+              disabled={
+                publishToShopify.isLoading ||
+                restoreFromShopify.isLoading
+              }
+              onClick={() => publishToShopify.mutate(job)}
+            >
+              Đặt làm ảnh chính
+            </Button>
+            <Button
               destructive
               size="slim"
               loading={
                 restoreFromShopify.isLoading &&
                 restoreFromShopify.variables?.id === job.id
               }
-              disabled={restoreFromShopify.isLoading}
+              disabled={
+                restoreFromShopify.isLoading ||
+                publishToShopify.isLoading
+              }
               onClick={() => restoreFromShopify.mutate(job)}
             >
               Khôi phục ảnh gốc

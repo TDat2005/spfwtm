@@ -8,6 +8,7 @@
     "dev": "cross-env NODE_ENV=development tsx watch index.ts",
     "typecheck": "tsc",
     "serve": "cross-env NODE_ENV=production tsx index.ts",
+    "prisma:generate": "prisma generate",
     "test": "vitest run",
     "test:watch": "vitest"
   },

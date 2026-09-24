@@ -13,6 +13,10 @@ export interface ShopifyMediaGateway {
     publish(
         input: PublishMediaInput,
     ): Promise<PublishedMediaResult>;
+    promoteMedia(
+        productId: string,
+        mediaId: string,
+    ): Promise<void>;
     deleteMedia(
         productId: string,
         mediaIds: string[],

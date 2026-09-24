@@ -14,14 +14,16 @@ enum CatalogProductStatus {
 }
 
 model Shop {
-  id             String           @id @default(cuid()) @db.VarChar(30)
-  domain         String           @unique @db.VarChar(255)
-  products       CatalogProduct[]
-  mediaAssets    MediaAsset[]
-  watermarkJobs  WatermarkJob[]
-  publishedMedia PublishedMedia[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  id                  String               @id @default(cuid()) @db.VarChar(30)
+  domain              String               @unique @db.VarChar(255)
+  products            CatalogProduct[]
+  mediaAssets         MediaAsset[]
+  watermarkJobs       WatermarkJob[]
+  publishedMedia      PublishedMedia[]
+  webhookInbox        WebhookInbox[]
+  publicationAttempts PublicationAttempt[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@map("shops")
 }
@@ -132,10 +134,11 @@ model WatermarkJob {
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 
-  shop           Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  product        CatalogProduct  @relation(fields: [catalogProductId], references: [id], onDelete: Restrict)
-  resultMedia    MediaAsset?     @relation("WatermarkResult", fields: [resultMediaId], references: [id], onDelete: SetNull)
-  publishedMedia PublishedMedia?
+  shop                Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product             CatalogProduct       @relation(fields: [catalogProductId], references: [id], onDelete: Restrict)
+  resultMedia         MediaAsset?          @relation("WatermarkResult", fields: [resultMediaId], references: [id], onDelete: SetNull)
+  publishedMedia      PublishedMedia?
+  publicationAttempts PublicationAttempt[]
 
   @@index([shopId, createdAt])
   @@index([shopId, status])
@@ -150,18 +153,77 @@ enum BackgroundJobStatus {
 }
 
 model BackgroundJob {
-  id          String              @id @db.VarChar(36)
-  jobType     String              @db.VarChar(50)
-  payload     String              @db.Text
-  status      BackgroundJobStatus @default(PENDING)
-  attempts    Int                 @default(0)
-  maxAttempts Int                 @default(3)
-  lastError   String?             @db.Text
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  id               String              @id @db.VarChar(36)
+  jobType          String              @db.VarChar(50)
+  payload          String              @db.Text
+  payloadVersion   Int                 @default(1)
+  processorVersion Int                 @default(1)
+  status           BackgroundJobStatus @default(PENDING)
+  attempts         Int                 @default(0)
+  maxAttempts      Int                 @default(3)
+  lastError        String?             @db.Text
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 
   @@index([status, createdAt])
   @@map("background_jobs")
+}
+
+enum WebhookInboxStatus {
+  RECEIVED
+  ENQUEUED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+model WebhookInbox {
+  id           String             @id @db.VarChar(36)
+  webhookId    String             @unique @db.VarChar(255)
+  eventId      String?            @db.VarChar(255)
+  shopId       String             @db.VarChar(30)
+  topic        String             @db.VarChar(100)
+  apiVersion   String             @db.VarChar(20)
+  triggeredAt  DateTime
+  productId    String             @db.VarChar(255)
+  payload      String             @db.LongText
+  status       WebhookInboxStatus @default(RECEIVED)
+  processedAt  DateTime?
+  errorMessage String?            @db.Text
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, productId, triggeredAt])
+  @@index([status, createdAt])
+  @@map("webhook_inbox")
+}
+
+enum PublicationAttemptStatus {
+  PUBLISHING
+  PUBLISHED
+  FAILED
+}
+
+model PublicationAttempt {
+  id             String                   @id @db.VarChar(36)
+  shopId         String                   @db.VarChar(30)
+  productId      String                   @db.VarChar(255)
+  watermarkJobId String                   @db.VarChar(36)
+  shopifyMediaId String?                  @db.VarChar(255)
+  status         PublicationAttemptStatus @default(PUBLISHING)
+  createdAt      DateTime                 @default(now())
+  completedAt    DateTime?
+
+  shop         Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  watermarkJob WatermarkJob @relation(fields: [watermarkJobId], references: [id], onDelete: Restrict)
+
+  @@index([shopId, productId, status])
+  @@index([shopId, shopifyMediaId])
+  @@index([watermarkJobId, createdAt])
+  @@map("publication_attempts")
 }
 
 model PublishedMedia {

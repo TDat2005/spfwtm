@@ -24,29 +24,46 @@ export class PrismaProductRepository implements ProductRepository {
             });
 
             for (const product of products) {
-                await transaction.catalogProduct.upsert({
-                    where: {
-                        shopId_shopifyProductId: {
-                            shopId: shop.id,
-                            shopifyProductId: product.id,
-                        },
+                const where = {
+                    shopId_shopifyProductId: {
+                        shopId: shop.id,
+                        shopifyProductId: product.id,
                     },
-                    create: {
+                };
+                const existing = await transaction.catalogProduct.findUnique({
+                    where,
+                    select: { sourceMediaId: true },
+                });
+
+                if (!existing) {
+                    await transaction.catalogProduct.create({
+                      data: {
                         shopId: shop.id,
                         shopifyProductId: product.id,
                         title: product.title,
                         status: product.status,
                         imageUrl: product.imageUrl,
                         imageAltText: product.imageAltText,
-                    },
-                    update: {
+                        sourceMediaId: product.mediaId,
+                      },
+                    });
+                } else {
+                    await transaction.catalogProduct.update({
+                      where,
+                      data: {
                         title: product.title,
                         status: product.status,
-                        imageUrl: product.imageUrl,
-                        imageAltText: product.imageAltText,
                         deletedAt: null,
-                    },
-                });
+                        ...(existing.sourceMediaId
+                          ? {}
+                          : {
+                              imageUrl: product.imageUrl,
+                              imageAltText: product.imageAltText,
+                              sourceMediaId: product.mediaId,
+                            }),
+                      },
+                    });
+                }
             }
         });
     }
@@ -72,6 +89,7 @@ export class PrismaProductRepository implements ProductRepository {
                     status: row.status,
                     imageUrl: row.imageUrl,
                     imageAltText: row.imageAltText,
+                    mediaId: row.sourceMediaId,
                 }),
         );
     }

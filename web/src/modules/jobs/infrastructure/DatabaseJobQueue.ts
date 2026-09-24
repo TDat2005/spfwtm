@@ -9,8 +9,10 @@ export class DatabaseJobQueue implements JobQueue {
     await this.prisma.backgroundJob.create({
       data: {
         id: job.id,
-        jobType: job.jobType,
+        jobType: job.jobName,
         payload: JSON.stringify(job.payload),
+        payloadVersion: job.payloadVersion,
+        processorVersion: job.processorVersion,
         status: job.status,
         attempts: job.attempts,
         maxAttempts: job.maxAttempts,
@@ -43,8 +45,10 @@ export class DatabaseJobQueue implements JobQueue {
 
     return new BackgroundJob({
       id: candidate.id,
-      jobType: candidate.jobType,
+      jobName: candidate.jobType,
       payload: JSON.parse(candidate.payload) as Record<string, unknown>,
+      payloadVersion: candidate.payloadVersion,
+      processorVersion: candidate.processorVersion,
       status: "PROCESSING",
       attempts: candidate.attempts + 1,
       maxAttempts: candidate.maxAttempts,
@@ -74,8 +78,10 @@ export class DatabaseJobQueue implements JobQueue {
 
     return new BackgroundJob({
       id: row.id,
-      jobType: row.jobType,
+      jobName: row.jobType,
       payload: JSON.parse(row.payload) as Record<string, unknown>,
+      payloadVersion: row.payloadVersion,
+      processorVersion: row.processorVersion,
       status: row.status,
       attempts: row.attempts,
       maxAttempts: row.maxAttempts,

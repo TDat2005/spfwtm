@@ -6,6 +6,7 @@ interface ProductProps {
   status: ProductStatus;
   imageUrl: string | null;
   imageAltText: string | null;
+  mediaId?: string | null;
 }
 
 export class Product {
@@ -14,6 +15,7 @@ export class Product {
   readonly status: ProductStatus;
   readonly imageUrl: string | null;
   readonly imageAltText: string | null;
+  readonly mediaId: string | null;
 
   constructor({
     id,
@@ -21,6 +23,7 @@ export class Product {
     status,
     imageUrl,
     imageAltText,
+    mediaId,
   }: ProductProps) {
     if (!id.trim()) {
       throw new Error("Product ID không được để trống");
@@ -35,5 +38,6 @@ export class Product {
     this.status = status;
     this.imageUrl = imageUrl;
     this.imageAltText = imageAltText;
+    this.mediaId = mediaId ?? null;
   }
 }
