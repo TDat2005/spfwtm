@@ -8,10 +8,14 @@ import {
   Thumbnail,
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery } from "react-query";
 
-interface SyncCatalogResponse {
+interface CatalogSyncState {
+  syncId: string | null;
+  status: "IDLE" | "RUNNING" | "COMPLETED" | "FAILED";
   syncedCount: number;
+  error: string | null;
 }
 
 interface ProductDto {
@@ -51,7 +55,25 @@ export function ProductsCard() {
     }
   );
 
-  const syncCatalog = useMutation<SyncCatalogResponse, Error>(
+  const syncStatus = useQuery<CatalogSyncState, Error>(
+    ["catalogSyncStatus"],
+    async () => {
+      const response = await fetch("/api/catalog/sync");
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    },
+    {
+      refetchOnWindowFocus: false,
+      // Chỉ poll nhanh khi đang có sync chạy nền.
+      refetchInterval: (state) => (state?.status === "RUNNING" ? 2_000 : false),
+    }
+  );
+
+  const syncCatalog = useMutation<CatalogSyncState, Error>(
     async () => {
       const response = await fetch("/api/catalog/sync", {
         method: "POST",
@@ -65,9 +87,8 @@ export function ProductsCard() {
       return await response.json();
     },
     {
-      onSuccess: async ({ syncedCount }) => {
-        await refetch();
-        shopify.toast.show(`Đã đồng bộ ${syncedCount} sản phẩm`);
+      onSuccess: async () => {
+        await syncStatus.refetch();
       },
       onError: (syncError) => {
         shopify.toast.show(`Đồng bộ thất bại: ${syncError.message}`, {
@@ -76,6 +97,31 @@ export function ProductsCard() {
       },
     }
   );
+
+  // Báo kết quả khi một sync đang theo dõi chuyển từ RUNNING sang trạng thái cuối.
+  const watchedSyncId = useRef<string | null>(null);
+  useEffect(() => {
+    const state = syncStatus.data;
+    if (!state?.syncId) return;
+    if (state.status === "RUNNING") {
+      watchedSyncId.current = state.syncId;
+      return;
+    }
+    if (watchedSyncId.current !== state.syncId) return;
+    watchedSyncId.current = null;
+
+    if (state.status === "COMPLETED") {
+      void refetch();
+      shopify.toast.show(`Đã đồng bộ ${state.syncedCount} sản phẩm`);
+    } else if (state.status === "FAILED") {
+      shopify.toast.show(`Đồng bộ thất bại: ${state.error ?? "Lỗi không rõ"}`, {
+        isError: true,
+      });
+    }
+  }, [syncStatus.data, refetch, shopify]);
+
+  const isSyncing =
+    syncCatalog.isLoading || syncStatus.data?.status === "RUNNING";
 
   if (isLoading) {
     return (
@@ -155,12 +201,19 @@ export function ProductsCard() {
       <div style={{ marginTop: "16px" }}>
         <Button
           primary
-          loading={syncCatalog.isLoading}
-          disabled={syncCatalog.isLoading}
+          loading={isSyncing}
+          disabled={isSyncing}
           onClick={() => syncCatalog.mutate()}
         >
           Đồng bộ từ Shopify
         </Button>
+        {syncStatus.data?.status === "RUNNING" && (
+          <div style={{ marginTop: "8px" }}>
+            <Text as="p" variant="bodySm" color="subdued">
+              {`Đang đồng bộ... ${syncStatus.data.syncedCount} sản phẩm`}
+            </Text>
+          </div>
+        )}
       </div>
 
       <div style={{ marginTop: "16px" }}>

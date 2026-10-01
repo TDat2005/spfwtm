@@ -13,9 +13,26 @@ enum CatalogProductStatus {
   ARCHIVED
 }
 
+enum CatalogSyncStatus {
+  IDLE
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
 model Shop {
-  id                  String               @id @default(cuid()) @db.VarChar(30)
-  domain              String               @unique @db.VarChar(255)
+  id     String @id @default(cuid()) @db.VarChar(30)
+  domain String @unique @db.VarChar(255)
+
+  catalogSyncId          String?           @db.VarChar(36)
+  catalogSyncStatus      CatalogSyncStatus @default(IDLE)
+  catalogSyncPage        Int               @default(0)
+  catalogSyncedCount     Int               @default(0)
+  catalogSyncError       String?           @db.Text
+  catalogSyncStartedAt   DateTime?
+  catalogSyncHeartbeatAt DateTime?
+  catalogSyncFinishedAt  DateTime?
+
   products            CatalogProduct[]
   mediaAssets         MediaAsset[]
   watermarkJobs       WatermarkJob[]

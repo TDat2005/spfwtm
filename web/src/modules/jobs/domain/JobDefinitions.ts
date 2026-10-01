@@ -16,6 +16,12 @@ export const CATALOG_RECONCILE_V1 = {
   processorVersion: 1,
 } as const;
 
+export const CATALOG_SYNC_PAGE_V1 = {
+  jobName: "CATALOG_SYNC_PAGE_V1",
+  payloadVersion: 1,
+  processorVersion: 1,
+} as const;
+
 export type JobDefinition = {
   jobName: string;
   payloadVersion: number;

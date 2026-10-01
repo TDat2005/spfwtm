@@ -21,6 +21,18 @@ export class PrismaProductRepository implements ProductRepository {
         update: {},
       });
 
+      // Một query đọc cho cả trang thay vì findUnique từng sản phẩm.
+      const existingRows = await transaction.catalogProduct.findMany({
+        where: {
+          shopId: shop.id,
+          shopifyProductId: { in: products.map((product) => product.id) },
+        },
+        select: { shopifyProductId: true, sourceMediaId: true },
+      });
+      const existingById = new Map(
+        existingRows.map((row) => [row.shopifyProductId, row])
+      );
+
       for (const product of products) {
         const where = {
           shopId_shopifyProductId: {
@@ -28,10 +40,7 @@ export class PrismaProductRepository implements ProductRepository {
             shopifyProductId: product.id,
           },
         };
-        const existing = await transaction.catalogProduct.findUnique({
-          where,
-          select: { sourceMediaId: true },
-        });
+        const existing = existingById.get(product.id);
 
         if (!existing) {
           await transaction.catalogProduct.create({
@@ -63,6 +72,9 @@ export class PrismaProductRepository implements ProductRepository {
           });
         }
       }
+    }, {
+      // Mặc định 5s không đủ cho một trang 250 sản phẩm.
+      timeout: 30_000,
     });
   }
 

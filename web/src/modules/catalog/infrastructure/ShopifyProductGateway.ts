@@ -1,16 +1,16 @@
 import { Product, type ProductStatus } from "../domain/Product.ts";
-import type { ProductGateway } from "../application/ProductGateway.ts";
+import type { ProductGateway, ProductPage } from "../application/ProductGateway.ts";
 import type { Session } from "@shopify/shopify-api";
 interface ShopifyGraphqlClient {
   request<T = undefined>(
     query: string,
-    options?: { variables?: Record<string, unknown> }
+    options?: { variables?: Record<string, unknown>; retries?: number }
   ): Promise<{
     data?: T extends undefined ? any : T;
   }>;
 }
 
-interface ShopifyApiContext {
+export interface ShopifyApiContext {
   api: {
     clients: {
       Graphql: new (options: { session: Session }) => ShopifyGraphqlClient;
@@ -43,26 +43,27 @@ interface GetProductsResponse {
   };
 }
 
+/** Tối đa của Shopify cho một connection. Query này rẻ nên lấy đủ 250. */
+const PAGE_SIZE = 250;
+
 export class ShopifyProductGateway implements ProductGateway {
   constructor(
     private readonly shopify: ShopifyApiContext,
     private readonly session: Session
   ) {}
 
-  async list(): Promise<Product[]> {
+  async listPage(cursor: string | null): Promise<ProductPage> {
     const client = new this.shopify.api.clients.Graphql({
       session: this.session,
     });
 
-    const products: Product[] = [];
-    let cursor: string | null = null;
-
-    do {
-      const result: { data?: GetProductsResponse } =
-        await client.request<GetProductsResponse>(
-          `
+    // sortKey: ID giữ thứ tự ổn định giữa các trang; sort theo UPDATED_AT có thể
+    // làm sản phẩm vừa sửa nhảy trang và bị bỏ sót.
+    const result: { data?: GetProductsResponse } =
+      await client.request<GetProductsResponse>(
+        `
       query GetProducts($cursor: String) {
-        products(first: 100, after: $cursor, sortKey: UPDATED_AT, reverse: true) {
+        products(first: ${PAGE_SIZE}, after: $cursor, sortKey: ID) {
           nodes {
             id
             title
@@ -84,31 +85,29 @@ export class ShopifyProductGateway implements ProductGateway {
         }
       }
     `,
-          { variables: { cursor } }
-        );
-      if (!result.data) {
-        throw new Error("Shopify GraphQL không trả về data");
-      }
-      products.push(
-        ...result.data.products.nodes.map((node: ShopifyProductNode) => {
-          const image = node.featuredMedia?.preview?.image;
-
-          return new Product({
-            id: node.id,
-            title: node.title,
-            status: parseProductStatus(node.status),
-            imageUrl: image?.url ?? null,
-            imageAltText: image?.altText ?? null,
-            mediaId: node.featuredMedia?.id ?? null,
-          });
-        })
+        // Client tự retry khi Shopify trả 429/5xx; lỗi khác để BullMQ retry cả job.
+        { variables: { cursor }, retries: 2 }
       );
-      cursor = result.data.products.pageInfo.hasNextPage
-        ? result.data.products.pageInfo.endCursor
-        : null;
-    } while (cursor && products.length < 1_000);
+    if (!result.data) {
+      throw new Error("Shopify GraphQL không trả về data");
+    }
 
-    return products.slice(0, 1_000);
+    const { nodes, pageInfo } = result.data.products;
+    return {
+      products: nodes.map((node: ShopifyProductNode) => {
+        const image = node.featuredMedia?.preview?.image;
+
+        return new Product({
+          id: node.id,
+          title: node.title,
+          status: parseProductStatus(node.status),
+          imageUrl: image?.url ?? null,
+          imageAltText: image?.altText ?? null,
+          mediaId: node.featuredMedia?.id ?? null,
+        });
+      }),
+      nextCursor: pageInfo.hasNextPage ? pageInfo.endCursor : null,
+    };
   }
 }
 

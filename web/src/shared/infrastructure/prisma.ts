@@ -33,6 +33,9 @@ export function createPrismaClient(): PrismaClient {
         password: requireEnvironment("DATABASE_PASSWORD"),
         database: requireEnvironment("DATABASE_NAME"),
         connectionLimit: 5,
+        // MySQL 8 (caching_sha2_password) cần RSA public key khi đăng nhập lần đầu
+        // sau mỗi lần restart container. Chỉ bật khi dev; production nên dùng TLS.
+        allowPublicKeyRetrieval: process.env.NODE_ENV !== "production",
     });
 
     return new PrismaClient({

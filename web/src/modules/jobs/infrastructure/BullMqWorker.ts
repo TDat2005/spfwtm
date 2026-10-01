@@ -4,8 +4,14 @@ import {
   type Job,
 } from "bullmq";
 
+export interface BullMqJobContext {
+  /** true khi lần chạy này thất bại thì BullMQ sẽ không retry nữa. */
+  isFinalAttempt: boolean;
+}
+
 export type BullMqJobHandler = (
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  context: BullMqJobContext
 ) => Promise<void>;
 
 interface BullMqWorkerOptions {
@@ -73,6 +79,8 @@ export class BullMqWorker {
     if (!handler) {
       throw new Error(`Không tìm thấy handler cho job type ${job.name}`);
     }
-    await handler(job.data);
+    await handler(job.data, {
+      isFinalAttempt: job.attemptsMade + 1 >= (job.opts.attempts ?? 1),
+    });
   }
 }

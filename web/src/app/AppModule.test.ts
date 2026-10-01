@@ -6,7 +6,8 @@ import type { AddressInfo } from "node:net";
 import type { Express, NextFunction, Request, Response } from "express";
 import { CatalogController } from "../modules/catalog/presentation/CatalogController.ts";
 import { ListProducts } from "../modules/catalog/application/ListProducts.ts";
-import { SyncCatalogFactory } from "../modules/catalog/infrastructure/SyncCatalogFactory.ts";
+import { StartCatalogSync } from "../modules/catalog/application/StartCatalogSync.ts";
+import { GetCatalogSyncStatus } from "../modules/catalog/application/GetCatalogSyncStatus.ts";
 import { MediaController } from "../modules/media/presentation/MediaController.ts";
 import { MediaService } from "../modules/media/application/MediaService.ts";
 import { PublicationController } from "../modules/shopify-publication/presentation/PublicationController.ts";
@@ -47,7 +48,8 @@ describe("Nest API routes", () => {
       ],
       providers: [
         { provide: ListProducts, useValue: { execute: async (shop: string) => [{ id: shop }] } },
-        { provide: SyncCatalogFactory, useValue: unused },
+        { provide: StartCatalogSync, useValue: unused },
+        { provide: GetCatalogSyncStatus, useValue: unused },
         {
           provide: MediaService,
           useValue: {
