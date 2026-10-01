@@ -1,6 +1,10 @@
 import { Page, Layout } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { ProductsCard, WatermarkStudio } from "../components";
+import {
+  BulkWatermarkStudio,
+  ProductsCard,
+  WatermarkStudio,
+} from "../components";
 
 export default function HomePage() {
   return (
@@ -9,6 +13,9 @@ export default function HomePage() {
       <Layout>
         <Layout.Section>
           <ProductsCard />
+        </Layout.Section>
+        <Layout.Section>
+          <BulkWatermarkStudio />
         </Layout.Section>
         <Layout.Section>
           <WatermarkStudio />

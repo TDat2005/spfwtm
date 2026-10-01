@@ -24,27 +24,13 @@ export class BullMqJobQueue implements JobPublisher {
   }
 
   async enqueue(job: BackgroundJob): Promise<void> {
-    await this.queue.add(job.jobName, {
-      ...job.payload,
-      payloadVersion: job.payloadVersion,
-      processorVersion: job.processorVersion,
-    }, {
-      jobId: job.id,
-      delay: job.delayMs,
-      attempts: job.maxAttempts,
-      backoff: {
-        type: "exponential",
-        delay: 1_000,
-      },
-      removeOnComplete: {
-        age: 60 * 60,
-        count: 1_000,
-      },
-      removeOnFail: {
-        age: 7 * 24 * 60 * 60,
-        count: 5_000,
-      },
-    });
+    const entry = toBullMqEntry(job);
+    await this.queue.add(entry.name, entry.data, entry.opts);
+  }
+
+  async enqueueMany(jobs: BackgroundJob[]): Promise<void> {
+    if (jobs.length === 0) return;
+    await this.queue.addBulk(jobs.map(toBullMqEntry));
   }
 
   async close(): Promise<void> {
@@ -74,4 +60,32 @@ export class BullMqJobQueue implements JobPublisher {
       }
     );
   }
+}
+
+function toBullMqEntry(job: BackgroundJob) {
+  return {
+    name: job.jobName,
+    data: {
+      ...job.payload,
+      payloadVersion: job.payloadVersion,
+      processorVersion: job.processorVersion,
+    },
+    opts: {
+      jobId: job.id,
+      delay: job.delayMs,
+      attempts: job.maxAttempts,
+      backoff: {
+        type: "exponential" as const,
+        delay: 1_000,
+      },
+      removeOnComplete: {
+        age: 60 * 60,
+        count: 1_000,
+      },
+      removeOnFail: {
+        age: 7 * 24 * 60 * 60,
+        count: 5_000,
+      },
+    },
+  };
 }

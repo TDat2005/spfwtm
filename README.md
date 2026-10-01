@@ -22,7 +22,7 @@ The Node app template comes with the following out-of-the-box functionality:
 
 This template combines a number of third party open-source tools:
 
-- [Express](https://expressjs.com/) builds the backend.
+- [NestJS](https://nestjs.com/) builds the backend with controllers for the app API. Its Express adapter hosts the Shopify OAuth and webhook middleware.
 - [Vite](https://vitejs.dev/) builds the [React](https://reactjs.org/) frontend.
 - [React Router](https://reactrouter.com/) is used for routing. We wrap this with file-based routing.
 - [React Query](https://react-query.tanstack.com/) queries the Admin API.
@@ -35,7 +35,7 @@ This template combines a number of third party open-source tools:
 
 The following Shopify tools complement these third-party tools to ease app development:
 
-- [Shopify API library](https://github.com/Shopify/shopify-node-api) adds OAuth to the Express backend. This lets users install the app and grant scope permissions.
+- [Shopify API library](https://github.com/Shopify/shopify-node-api) adds OAuth and webhook handling to the Nest backend through the Express adapter. This lets users install the app and grant scope permissions.
 - [App Bridge React](https://shopify.dev/docs/apps/tools/app-bridge/getting-started/using-react) adds [authentication to API requests](https://shopify.dev/docs/api/app-bridge-library/apis/resource-fetching) in the frontend and renders components outside of the App’s iFrame.
 - [Polaris React](https://polaris.shopify.com/) is a powerful design system and component library that helps developers build high quality, consistent experiences for Shopify merchants.
 - [File-based routing](https://github.com/Shopify/shopify-frontend-template-react/blob/main/Routes.jsx) makes creating new pages easier.
@@ -45,7 +45,7 @@ The following Shopify tools complement these third-party tools to ease app devel
 
 ### Requirements
 
-1. You must [download and install Node.js](https://nodejs.org/en/download/) if you don't already have it.
+1. You must [download and install Node.js 20 or newer](https://nodejs.org/en/download/) if you don't already have it.
 1. You must [create a Shopify partner account](https://partners.shopify.com/signup) if you don’t have one.
 1. You must create a store for testing if you don't have one, either a [development store](https://help.shopify.com/en/partners/dashboard/development-stores#create-a-development-store) or a [Shopify Plus sandbox store](https://help.shopify.com/en/partners/dashboard/managing-stores/plus-sandbox-store).
 

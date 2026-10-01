@@ -43,7 +43,7 @@ PENDING ──cancel──> CANCELLED
 
 ### Presentation
 
-`watermarkRoutes` chuyển HTTP body thành input của use case. Route không tự chứa luật watermark.
+`WatermarkController` chuyển HTTP body thành input của use case. Controller không tự chứa luật watermark.
 
 ## Luồng khi người dùng nhấn “Tạo ảnh watermark”
 
@@ -78,7 +78,7 @@ Ví dụ thêm `padding`:
 2. Thêm cột Prisma và migration.
 3. Map thuộc tính trong `PrismaWatermarkJobRepository`.
 4. Dùng thuộc tính trong `SharpWatermarkProcessor`.
-5. Nhận/trả thuộc tính trong `watermarkRoutes`.
+5. Nhận/trả thuộc tính trong `WatermarkController`.
 6. Thêm control vào `WatermarkStudio`.
 7. Thêm test domain và processor.
 

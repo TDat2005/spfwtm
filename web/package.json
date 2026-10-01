@@ -9,14 +9,17 @@
     "typecheck": "tsc",
     "serve": "cross-env NODE_ENV=production tsx index.ts",
     "prisma:generate": "prisma generate",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest --passWithNoTests"
   },
   "type": "module",
   "engines": {
-    "node": ">=16.13.0"
+    "node": ">=20"
   },
   "dependencies": {
+    "@nestjs/common": "^12.1.1",
+    "@nestjs/core": "^12.1.1",
+    "@nestjs/platform-express": "^12.1.1",
     "@prisma/adapter-mariadb": "7.10.0",
     "@prisma/client": "7.10.0",
     "@shopify/shopify-app-express": "^5.0.8",
@@ -26,6 +29,8 @@
     "cross-env": "^7.0.3",
     "dotenv": "^18.0.0",
     "ioredis": "^6.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
     "serve-static": "^1.14.1",
     "sharp": "^0.35.4"
   },

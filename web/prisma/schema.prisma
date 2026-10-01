@@ -19,6 +19,7 @@ model Shop {
   products            CatalogProduct[]
   mediaAssets         MediaAsset[]
   watermarkJobs       WatermarkJob[]
+  watermarkBatches    WatermarkBatch[]
   publishedMedia      PublishedMedia[]
   webhookInbox        WebhookInbox[]
   publicationAttempts PublicationAttempt[]
@@ -112,6 +113,7 @@ model WatermarkJob {
   id               String             @id @db.VarChar(36)
   shopId           String             @db.VarChar(30)
   catalogProductId String             @db.VarChar(30)
+  batchId          String?            @db.VarChar(36)
   sourceImageUrl   String             @db.Text
   watermarkType    WatermarkType      @default(TEXT)
   text             String?            @db.VarChar(100)
@@ -139,10 +141,25 @@ model WatermarkJob {
   resultMedia         MediaAsset?          @relation("WatermarkResult", fields: [resultMediaId], references: [id], onDelete: SetNull)
   publishedMedia      PublishedMedia?
   publicationAttempts PublicationAttempt[]
+  batch               WatermarkBatch?      @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
   @@index([shopId, createdAt])
   @@index([shopId, status])
+  @@index([batchId, status])
   @@map("watermark_jobs")
+}
+
+model WatermarkBatch {
+  id        String   @id @db.VarChar(36)
+  shopId    String   @db.VarChar(30)
+  totalJobs Int
+  createdAt DateTime @default(now())
+
+  shop Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  jobs WatermarkJob[]
+
+  @@index([shopId, createdAt])
+  @@map("watermark_batches")
 }
 
 enum BackgroundJobStatus {

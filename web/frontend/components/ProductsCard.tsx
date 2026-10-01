@@ -1,5 +1,6 @@
 import {
   Badge,
+  Banner,
   Button,
   Card,
   DataTable,
@@ -19,6 +20,8 @@ interface ProductDto {
   status: "ACTIVE" | "DRAFT" | "ARCHIVED";
   imageUrl: string | null;
   imageAltText: string | null;
+  needsReview: boolean;
+  sourceVersion: number;
 }
 
 interface CatalogResponse {
@@ -28,13 +31,10 @@ interface CatalogResponse {
 export function ProductsCard() {
   const shopify = useAppBridge();
 
-  const {
-    data,
-    isLoading,
-    isError,
-    error,
-    refetch,
-  } = useQuery<CatalogResponse, Error>(
+  const { data, isLoading, isError, error, refetch } = useQuery<
+    CatalogResponse,
+    Error
+  >(
     ["catalogProducts"],
     async () => {
       const response = await fetch("/api/catalog/products");
@@ -47,7 +47,8 @@ export function ProductsCard() {
     },
     {
       refetchOnWindowFocus: false,
-    },
+      refetchInterval: 5_000,
+    }
   );
 
   const syncCatalog = useMutation<SyncCatalogResponse, Error>(
@@ -73,7 +74,7 @@ export function ProductsCard() {
           isError: true,
         });
       },
-    },
+    }
   );
 
   if (isLoading) {
@@ -122,14 +123,34 @@ export function ProductsCard() {
       {product.status}
     </Badge>,
 
+    product.needsReview ? (
+      <Badge key={`${product.id}-source`} status="attention">
+        Ảnh mới – cần duyệt
+      </Badge>
+    ) : (
+      <Badge key={`${product.id}-source`} status="success">
+        {`Đã đồng bộ (v${product.sourceVersion})`}
+      </Badge>
+    ),
+
     product.id,
   ]);
+
+  const reviewCount = products.filter((product) => product.needsReview).length;
 
   return (
     <Card sectioned>
       <Text as="h2" variant="headingMd">
         Shopify catalog
       </Text>
+
+      {reviewCount > 0 && (
+        <div style={{ marginTop: "16px" }}>
+          <Banner status="warning" title={`${reviewCount} sản phẩm có ảnh mới`}>
+            <p>Chọn các sản phẩm này ở Bulk Watermark để tạo lại ảnh.</p>
+          </Banner>
+        </div>
+      )}
 
       <div style={{ marginTop: "16px" }}>
         <Button
@@ -144,16 +165,12 @@ export function ProductsCard() {
 
       <div style={{ marginTop: "16px" }}>
         <DataTable
-          columnContentTypes={[
-            "text",
-            "text",
-            "text",
-            "text",
-          ]}
+          columnContentTypes={["text", "text", "text", "text", "text"]}
           headings={[
             "Ảnh",
             "Tên sản phẩm",
             "Trạng thái",
+            "Ảnh nguồn",
             "Shopify ID",
           ]}
           rows={rows}

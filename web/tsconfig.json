@@ -10,7 +10,8 @@
     "allowJs": true,
     "checkJs": false,
     "noEmit": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "experimentalDecorators": true
   },
   "include": [
   "index.ts",

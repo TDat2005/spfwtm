@@ -7,6 +7,8 @@ interface ProductProps {
   imageUrl: string | null;
   imageAltText: string | null;
   mediaId?: string | null;
+  needsReview?: boolean;
+  sourceVersion?: number;
 }
 
 export class Product {
@@ -16,6 +18,8 @@ export class Product {
   readonly imageUrl: string | null;
   readonly imageAltText: string | null;
   readonly mediaId: string | null;
+  readonly needsReview: boolean;
+  readonly sourceVersion: number;
 
   constructor({
     id,
@@ -24,6 +28,8 @@ export class Product {
     imageUrl,
     imageAltText,
     mediaId,
+    needsReview,
+    sourceVersion,
   }: ProductProps) {
     if (!id.trim()) {
       throw new Error("Product ID không được để trống");
@@ -39,5 +45,7 @@ export class Product {
     this.imageUrl = imageUrl;
     this.imageAltText = imageAltText;
     this.mediaId = mediaId ?? null;
+    this.needsReview = needsReview ?? false;
+    this.sourceVersion = sourceVersion ?? 1;
   }
 }

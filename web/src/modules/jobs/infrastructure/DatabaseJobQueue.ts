@@ -23,6 +23,25 @@ export class DatabaseJobQueue implements JobQueue {
     });
   }
 
+  async enqueueMany(jobs: BackgroundJob[]): Promise<void> {
+    if (jobs.length === 0) return;
+    await this.prisma.backgroundJob.createMany({
+      data: jobs.map((job) => ({
+        id: job.id,
+        jobType: job.jobName,
+        payload: JSON.stringify(job.payload),
+        payloadVersion: job.payloadVersion,
+        processorVersion: job.processorVersion,
+        status: job.status,
+        attempts: job.attempts,
+        maxAttempts: job.maxAttempts,
+        lastError: job.lastError,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      })),
+    });
+  }
+
   async acquireNext(jobTypes: string[]): Promise<BackgroundJob | null> {
     const candidate = await this.prisma.backgroundJob.findFirst({
       where: {
