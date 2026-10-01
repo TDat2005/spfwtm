@@ -5,7 +5,6 @@ import type {
 } from "./WatermarkPorts.ts";
 
 interface ProcessWatermarkJobOptions {
-  /** BullMQ dùng cờ này khi chạy lại một job bị stalled giữa chừng. */
   resumeProcessing?: boolean;
 }
 
@@ -32,12 +31,8 @@ export class ProcessWatermarkJob {
       return job;
     }
 
-    // Background queue có thể gọi lại sau lỗi tạm thời. Aggregate phải đi qua
-    // transition FAILED -> PENDING trước khi được xử lý lại.
     if (job.status === "FAILED") job.retry();
 
-    // Lần chạy bình thường đi PENDING -> PROCESSING. Khi BullMQ phục hồi một
-    // job stalled, aggregate đã là PROCESSING nên tiếp tục công việc idempotent.
     if (job.status === "PENDING") {
       job.start();
       await this.repository.save(job);

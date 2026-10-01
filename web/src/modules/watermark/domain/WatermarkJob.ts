@@ -35,9 +35,6 @@ export interface WatermarkJobProps {
   createdAt?: Date;
 }
 
-/**
- * Aggregate Root: đại diện một lần xử lý watermark và bảo vệ vòng đời của job.
- */
 export class WatermarkJob {
   readonly id: string;
   readonly shopDomain: string;

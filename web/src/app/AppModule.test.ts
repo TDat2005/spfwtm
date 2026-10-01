@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import type { Express, NextFunction, Request, Response } from "express";
 import { CatalogController } from "../modules/catalog/presentation/CatalogController.ts";
 import { ListProducts } from "../modules/catalog/application/ListProducts.ts";
+import { ListProductTypes } from "../modules/catalog/application/ListProductTypes.ts";
 import { StartCatalogSync } from "../modules/catalog/application/StartCatalogSync.ts";
 import { GetCatalogSyncStatus } from "../modules/catalog/application/GetCatalogSyncStatus.ts";
 import { MediaController } from "../modules/media/presentation/MediaController.ts";
@@ -37,7 +38,6 @@ describe("Nest API routes", () => {
     });
     const unused = {};
 
-    // Controller thật + provider giả: Nest inject mock thay cho use case thật.
     @Module({
       controllers: [
         CatalogController,
@@ -48,6 +48,7 @@ describe("Nest API routes", () => {
       ],
       providers: [
         { provide: ListProducts, useValue: { execute: async (shop: string) => [{ id: shop }] } },
+        { provide: ListProductTypes, useValue: unused },
         { provide: StartCatalogSync, useValue: unused },
         { provide: GetCatalogSyncStatus, useValue: unused },
         {
@@ -79,8 +80,6 @@ describe("Nest API routes", () => {
     })
     class ApiTestModule {}
 
-    // SpaModule import sau cùng, giống AppModule, để kiểm tra route "{*path}"
-    // không nuốt mất các route /api.
     @Module({ imports: [ApiTestModule, SpaModule] })
     class TestAppModule {}
 
@@ -126,8 +125,25 @@ describe("Nest API routes", () => {
       expect((await batch.json() as { batch: { id: string } }).batch.id).toBe("batch-1");
       expect(createBatch).toHaveBeenCalledWith(expect.objectContaining({
         shopDomain: "test.myshopify.com",
-        productIds: ["product-1"],
+        selection: { kind: "PRODUCT_IDS", productIds: ["product-1"] },
       }));
+
+      const typeBatch = await fetch(`${base}/api/watermarks/batches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ productType: "Áo thun" }),
+      });
+      expect(typeBatch.status).toBe(201);
+      expect(createBatch).toHaveBeenLastCalledWith(expect.objectContaining({
+        selection: { kind: "PRODUCT_TYPE", productType: "Áo thun" },
+      }));
+
+      const ambiguousBatch = await fetch(`${base}/api/watermarks/batches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ productIds: ["product-1"], productType: "Áo thun" }),
+      });
+      expect(ambiguousBatch.status).toBe(400);
 
       const invalidBatch = await fetch(`${base}/api/watermarks/batches`, {
         method: "POST",

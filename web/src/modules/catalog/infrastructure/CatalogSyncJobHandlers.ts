@@ -5,7 +5,6 @@ import type { CatalogSyncRepository } from "../application/CatalogSyncPorts.ts";
 import { SyncCatalogPage } from "../application/SyncCatalogPage.ts";
 import { CATALOG_SYNC_REPOSITORY } from "../tokens.ts";
 
-/** Đăng ký handler đồng bộ từng trang catalog với BullMQ worker. */
 @Injectable()
 export class CatalogSyncJobHandlers implements OnModuleInit {
   private readonly logger = new Logger("CatalogSync");
@@ -33,7 +32,6 @@ export class CatalogSyncJobHandlers implements OnModuleInit {
       try {
         await this.syncCatalogPage.execute(input);
       } catch (error) {
-        // Hết lượt retry: đánh dấu FAILED để UI dừng chờ và cho phép sync lại.
         if (context.isFinalAttempt) {
           const message = error instanceof Error ? error.message : String(error);
           this.logger.error(`Sync ${input.syncId} của ${input.shopDomain} thất bại: ${message}`);

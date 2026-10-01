@@ -8,9 +8,14 @@ export interface CreatedBatchJob {
 export interface CreatedWatermarkBatch {
   id: string;
   totalJobs: number;
+  skippedProducts: number;
   createdAt: Date;
   jobs: CreatedBatchJob[];
 }
+
+export type WatermarkBatchSelection =
+  | { kind: "PRODUCT_IDS"; productIds: string[] }
+  | { kind: "PRODUCT_TYPE"; productType: string };
 
 export type WatermarkBatchStatus =
   | "QUEUED"
@@ -35,7 +40,8 @@ export interface WatermarkBatchSummary {
 export interface WatermarkBatchRepository {
   create(input: {
     shopDomain: string;
-    productIds: string[];
+    selection: WatermarkBatchSelection;
+    maxJobs: number;
     configuration: WatermarkConfiguration;
   }): Promise<CreatedWatermarkBatch>;
   list(shopDomain: string): Promise<WatermarkBatchSummary[]>;

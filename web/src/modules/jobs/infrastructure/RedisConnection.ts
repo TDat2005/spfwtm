@@ -29,12 +29,10 @@ export function redisRuntimeConfigFromEnv(
     queueName,
     prefix,
     concurrency,
-    // API request nên báo lỗi sớm nếu Redis không sẵn sàng.
     producerConnection: {
       ...baseConnection,
       maxRetriesPerRequest: 1,
     },
-    // Worker là tiến trình nền dài hạn, nên để BullMQ tự reconnect.
     workerConnection: {
       ...baseConnection,
       maxRetriesPerRequest: null,

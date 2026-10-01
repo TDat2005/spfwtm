@@ -6,6 +6,7 @@ import { JobsModule } from "../jobs/JobsModule.ts";
 import type { CatalogSyncRepository } from "./application/CatalogSyncPorts.ts";
 import { GetCatalogSyncStatus } from "./application/GetCatalogSyncStatus.ts";
 import { ListProducts } from "./application/ListProducts.ts";
+import { ListProductTypes } from "./application/ListProductTypes.ts";
 import type { ProductRepository } from "./application/ProductRepository.ts";
 import { StartCatalogSync } from "./application/StartCatalogSync.ts";
 import { SyncCatalogPage } from "./application/SyncCatalogPage.ts";
@@ -35,6 +36,11 @@ import { CATALOG_SYNC_REPOSITORY, PRODUCT_REPOSITORY } from "./tokens.ts";
       provide: ListProducts,
       inject: [PRODUCT_REPOSITORY],
       useFactory: (repository: ProductRepository) => new ListProducts(repository),
+    },
+    {
+      provide: ListProductTypes,
+      inject: [PRODUCT_REPOSITORY],
+      useFactory: (repository: ProductRepository) => new ListProductTypes(repository),
     },
     {
       provide: GetCatalogSyncStatus,

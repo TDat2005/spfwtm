@@ -1,9 +1,5 @@
 import { HttpException, HttpStatus, Logger } from "@nestjs/common";
 
-/**
- * Đổi lỗi từ use case thành HttpException để Nest tự trả response.
- * Body giữ dạng { error: string } như frontend đang dùng.
- */
 export function toHttpException(
   label: string,
   error: unknown,

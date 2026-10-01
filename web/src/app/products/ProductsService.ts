@@ -3,7 +3,6 @@ import type { Session } from "@shopify/shopify-api";
 import productCreator from "../../../product-creator.js";
 import { SHOPIFY, type ShopifyApp } from "../../shared/nest/tokens.ts";
 
-/** Service Nest "kiểu cổ điển": class @Injectable, dependency inject qua constructor. */
 @Injectable()
 export class ProductsService {
   constructor(@Inject(SHOPIFY) private readonly shopify: ShopifyApp) {}

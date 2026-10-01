@@ -1,6 +1,10 @@
 import sharp, { type Sharp } from "sharp";
 import type { WatermarkConfiguration } from "../domain/WatermarkJob.ts";
 import type { WatermarkProcessor } from "../application/WatermarkPorts.ts";
+import {
+  overlayPlacements,
+  textOverlayMetrics,
+} from "../domain/WatermarkGeometry.ts";
 
 interface PreparedOverlay {
   bytes: Buffer;
@@ -42,13 +46,13 @@ async function prepareTextOverlay(
   configuration: WatermarkConfiguration,
   imageWidth: number
 ): Promise<PreparedOverlay> {
-  const fontSize = Math.max(12, Math.round(imageWidth * configuration.fontSize));
-  const padding = Math.max(10, Math.round(fontSize * 0.6));
-  const overlayWidth = Math.min(
-    Math.round(imageWidth * 0.92),
-    Math.max(120, Math.round(configuration.text!.length * fontSize * 0.68 + padding * 2))
-  );
-  const overlayHeight = fontSize + padding * 2 + Math.ceil(configuration.strokeWidth * 2);
+  const { fontSize, width: overlayWidth, height: overlayHeight } =
+    textOverlayMetrics(
+      configuration.text!,
+      configuration.fontSize,
+      configuration.strokeWidth,
+      imageWidth
+    );
   const svg = Buffer.from(
     `<svg width="${overlayWidth}" height="${overlayHeight}" xmlns="http://www.w3.org/2000/svg">` +
       `<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" ` +
@@ -106,10 +110,13 @@ async function render(
   overlay: PreparedOverlay,
   configuration: WatermarkConfiguration
 ) {
-  const positions =
-    configuration.layout === "TILED"
-      ? tiledPositions(imageWidth, imageHeight, overlay, configuration)
-      : [singlePosition(imageWidth, imageHeight, overlay, configuration)];
+  const positions = overlayPlacements(
+    configuration.layout,
+    imageWidth,
+    imageHeight,
+    overlay,
+    configuration
+  );
   const bytes = await image
     .composite(
       positions.map(({ left, top }) => ({
@@ -121,75 +128,6 @@ async function render(
     .webp({ quality: 90 })
     .toBuffer();
   return { bytes, mimeType: "image/webp" };
-}
-
-function singlePosition(
-  imageWidth: number,
-  imageHeight: number,
-  overlay: PreparedOverlay,
-  configuration: WatermarkConfiguration
-): { left: number; top: number } {
-  const margin = Math.max(8, Math.round(Math.min(imageWidth, imageHeight) * 0.02));
-  const horizontal = configuration.position.endsWith("LEFT")
-    ? margin
-    : configuration.position.endsWith("RIGHT")
-      ? imageWidth - overlay.width - margin
-      : Math.round((imageWidth - overlay.width) / 2);
-  const vertical = configuration.position.startsWith("TOP")
-    ? margin
-    : configuration.position.startsWith("BOTTOM")
-      ? imageHeight - overlay.height - margin
-      : Math.round((imageHeight - overlay.height) / 2);
-
-  return {
-    left: clamp(
-      horizontal + Math.round(configuration.offsetX * imageWidth),
-      0,
-      Math.max(0, imageWidth - overlay.width)
-    ),
-    top: clamp(
-      vertical + Math.round(configuration.offsetY * imageHeight),
-      0,
-      Math.max(0, imageHeight - overlay.height)
-    ),
-  };
-}
-
-function tiledPositions(
-  imageWidth: number,
-  imageHeight: number,
-  overlay: PreparedOverlay,
-  configuration: WatermarkConfiguration
-): Array<{ left: number; top: number }> {
-  const stepX = overlay.width + Math.max(Math.round(overlay.width * 0.6), Math.round(imageWidth * 0.06));
-  const stepY = overlay.height + Math.max(Math.round(overlay.height * 0.8), Math.round(imageHeight * 0.06));
-  const shiftX = Math.round(configuration.offsetX * imageWidth);
-  const shiftY = Math.round(configuration.offsetY * imageHeight);
-  const result: Array<{ left: number; top: number }> = [];
-
-  for (let top = -stepY + shiftY; top < imageHeight; top += stepY) {
-    const row = Math.floor((top - shiftY) / stepY);
-    const rowShift = Math.abs(row % 2) * Math.round(stepX / 2);
-    for (
-      let left = -stepX + shiftX + rowShift;
-      left < imageWidth;
-      left += stepX
-    ) {
-      if (
-        left + overlay.width > 0 &&
-        top + overlay.height > 0 &&
-        left < imageWidth &&
-        top < imageHeight
-      ) {
-        result.push({ left: Math.max(0, left), top: Math.max(0, top) });
-      }
-    }
-  }
-  return result;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function escapeXml(value: string): string {

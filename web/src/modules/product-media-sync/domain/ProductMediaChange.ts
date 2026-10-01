@@ -19,6 +19,7 @@ export interface ProductMediaState {
   productId: string;
   title: string;
   status: "ACTIVE" | "DRAFT" | "ARCHIVED";
+  productType: string;
   primaryMedia: ProductMediaItem | null;
   media: readonly ProductMediaItem[];
 }

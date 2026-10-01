@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, type PipeTransform } from "@nestjs/common";
+import type { WatermarkBatchSelection } from "../application/BulkWatermarkPorts.ts";
 import type {
   WatermarkFontFamily,
   WatermarkLayout,
@@ -13,11 +14,6 @@ const layouts = new Set<WatermarkLayout>(["SINGLE", "TILED"]);
 
 export type WatermarkConfigurationInput = ReturnType<WatermarkConfigurationPipe["transform"]>;
 
-/**
- * Pipe chạy trước controller method: đọc body thô, gán giá trị mặc định và
- * trả về cấu hình đã kiểm tra. Dữ liệu sai → 400 trước khi vào controller.
- * Dùng: @Body(WatermarkConfigurationPipe) configuration: WatermarkConfigurationInput
- */
 @Injectable()
 export class WatermarkConfigurationPipe implements PipeTransform {
   transform(body: Record<string, unknown>) {
@@ -49,13 +45,25 @@ export class WatermarkConfigurationPipe implements PipeTransform {
   }
 }
 
-/** Dùng: @Body("productIds", ProductIdsPipe) productIds: string[] */
 @Injectable()
-export class ProductIdsPipe implements PipeTransform {
-  transform(value: unknown): string[] {
-    if (!Array.isArray(value)) {
+export class BatchSelectionPipe implements PipeTransform {
+  transform(body: Record<string, unknown>): WatermarkBatchSelection {
+    const hasIds = body.productIds !== undefined;
+    const hasType = body.productType !== undefined;
+    if (hasIds === hasType) {
+      throw new BadRequestException({
+        error: "Cần gửi đúng một trong hai: productIds hoặc productType",
+      });
+    }
+    if (hasType) {
+      if (typeof body.productType !== "string") {
+        throw new BadRequestException({ error: "productType phải là chuỗi" });
+      }
+      return { kind: "PRODUCT_TYPE", productType: body.productType };
+    }
+    if (!Array.isArray(body.productIds)) {
       throw new BadRequestException({ error: "productIds phải là một mảng" });
     }
-    return value.map(String);
+    return { kind: "PRODUCT_IDS", productIds: body.productIds.map(String) };
   }
 }

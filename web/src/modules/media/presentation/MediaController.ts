@@ -24,7 +24,6 @@ export class MediaController {
   async content(
     @Param("id") id: string,
     @ShopifySession() session: Session,
-    // passthrough: chỉ dùng response để set header, Nest vẫn tự gửi body.
     @Res({ passthrough: true }) response: Response,
   ): Promise<StreamableFile> {
     try {

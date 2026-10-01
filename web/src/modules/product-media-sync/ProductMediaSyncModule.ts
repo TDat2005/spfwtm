@@ -30,8 +30,6 @@ import { ProductMediaSyncJobHandlers } from "./infrastructure/ProductMediaSyncJo
     },
     ProductMediaSyncJobHandlers,
   ],
-  // ReceiveProductWebhook: main.ts cần để gắn webhook handler.
-  // PrismaPublicationAttemptRepository: PublicationModule dùng khi publish ảnh.
   exports: [ReceiveProductWebhook, PrismaPublicationAttemptRepository],
 })
 export class ProductMediaSyncModule {}

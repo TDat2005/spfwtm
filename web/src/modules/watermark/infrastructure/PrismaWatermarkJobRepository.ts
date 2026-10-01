@@ -49,9 +49,6 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
       },
     });
 
-    // Chỉ xác nhận ảnh đã được duyệt nếu job hoàn tất đúng trên phiên bản ảnh
-    // nguồn đã snapshot. Một webhook mới đến trong lúc batch chạy sẽ không bị
-    // job cũ vô tình xóa cờ needsReview.
     if (job.status === "COMPLETED") {
       await this.prisma.catalogProduct.updateMany({
         where: {

@@ -9,7 +9,7 @@ import {
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useEffect, useRef } from "react";
-import { useMutation, useQuery } from "react-query";
+import { useMutation, useQuery, useQueryClient } from "react-query";
 
 interface CatalogSyncState {
   syncId: string | null;
@@ -34,6 +34,7 @@ interface CatalogResponse {
 
 export function ProductsCard() {
   const shopify = useAppBridge();
+  const queryClient = useQueryClient();
 
   const { data, isLoading, isError, error, refetch } = useQuery<
     CatalogResponse,
@@ -68,7 +69,6 @@ export function ProductsCard() {
     },
     {
       refetchOnWindowFocus: false,
-      // Chỉ poll nhanh khi đang có sync chạy nền.
       refetchInterval: (state) => (state?.status === "RUNNING" ? 2_000 : false),
     }
   );
@@ -98,7 +98,6 @@ export function ProductsCard() {
     }
   );
 
-  // Báo kết quả khi một sync đang theo dõi chuyển từ RUNNING sang trạng thái cuối.
   const watchedSyncId = useRef<string | null>(null);
   useEffect(() => {
     const state = syncStatus.data;
@@ -112,13 +111,14 @@ export function ProductsCard() {
 
     if (state.status === "COMPLETED") {
       void refetch();
+      void queryClient.invalidateQueries(["catalogProductTypes"]);
       shopify.toast.show(`Đã đồng bộ ${state.syncedCount} sản phẩm`);
     } else if (state.status === "FAILED") {
       shopify.toast.show(`Đồng bộ thất bại: ${state.error ?? "Lỗi không rõ"}`, {
         isError: true,
       });
     }
-  }, [syncStatus.data, refetch, shopify]);
+  }, [syncStatus.data, refetch, queryClient, shopify]);
 
   const isSyncing =
     syncCatalog.isLoading || syncStatus.data?.status === "RUNNING";

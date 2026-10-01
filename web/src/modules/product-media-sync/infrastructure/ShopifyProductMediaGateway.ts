@@ -32,6 +32,7 @@ interface ProductMediaResponse {
     id: string;
     title: string;
     status: string;
+    productType: string;
     media: { nodes: ShopifyMediaNode[] };
   } | null;
 }
@@ -53,6 +54,7 @@ export class ShopifyProductMediaGateway implements ProductMediaGateway {
             id
             title
             status
+            productType
             media(
               first: 20
               query: "media_type:IMAGE"
@@ -85,6 +87,7 @@ export class ShopifyProductMediaGateway implements ProductMediaGateway {
       productId: result.data.product.id,
       title: result.data.product.title,
       status: productStatus(result.data.product.status),
+      productType: result.data.product.productType.trim(),
       primaryMedia: media[0] ?? null,
       media,
     };

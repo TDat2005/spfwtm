@@ -3,7 +3,6 @@ import { WATERMARK_PROCESS_V1, assertJobVersion } from "../../jobs/domain/JobDef
 import { BullMqWorker } from "../../jobs/infrastructure/BullMqWorker.ts";
 import { ProcessWatermarkJob } from "../application/ProcessWatermarkJob.ts";
 
-/** Đăng ký handler xử lý job watermark với BullMQ worker khi module khởi tạo. */
 @Injectable()
 export class WatermarkJobHandlers implements OnModuleInit {
   constructor(
@@ -17,7 +16,6 @@ export class WatermarkJobHandlers implements OnModuleInit {
       await this.process(payload);
     });
 
-    // Tương thích với job đã nằm trong queue trước khi tên V1 được triển khai.
     this.worker.registerHandler("WATERMARK_PROCESS", (payload) => this.process(payload));
   }
 

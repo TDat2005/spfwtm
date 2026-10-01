@@ -8,7 +8,6 @@ import { AdminGraphqlMediaGateway } from "./AdminGraphqlMediaGateway.ts";
 
 type ShopifyApiContext = ConstructorParameters<typeof AdminGraphqlMediaGateway>[0];
 
-/** Tạo use case cần Shopify session của request hiện tại. */
 export class PublicationUseCaseFactory {
   constructor(
     private readonly shopify: ShopifyApiContext,

@@ -4,7 +4,6 @@ import type {
   CatalogSyncState,
 } from "../application/CatalogSyncPorts.ts";
 
-/** Trạng thái sync lưu ngay trên bảng shops: mỗi shop chỉ có một sync tại một thời điểm. */
 export class PrismaCatalogSyncRepository implements CatalogSyncRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -39,7 +38,6 @@ export class PrismaCatalogSyncRepository implements CatalogSyncRepository {
     });
 
     const now = new Date();
-    // Điều kiện nằm trong câu UPDATE nên hai request đồng thời chỉ một bên thắng.
     const { count } = await this.prisma.shop.updateMany({
       where: {
         domain: shopDomain,

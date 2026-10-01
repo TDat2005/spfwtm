@@ -5,7 +5,6 @@ import {
 } from "bullmq";
 
 export interface BullMqJobContext {
-  /** true khi lần chạy này thất bại thì BullMQ sẽ không retry nữa. */
   isFinalAttempt: boolean;
 }
 
@@ -21,7 +20,6 @@ interface BullMqWorkerOptions {
   prefix?: string;
 }
 
-/** Consumer adapter: BullMQ đẩy job tới đúng application handler. */
 export class BullMqWorker {
   private readonly handlers = new Map<string, BullMqJobHandler>();
   private worker: Worker<Record<string, unknown>> | null = null;

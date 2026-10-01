@@ -54,8 +54,6 @@ export class PublishWatermarkedImage {
                 altText: input.altText.trim() || "Product image with watermark",
             });
 
-            // Lưu dấu vết media trước khi reorder để webhook do app tạo luôn
-            // được nhận diện, kể cả khi delivery đến rất nhanh.
             await this.publicationAttempts.recordMedia(
                 attemptId,
                 input.shopDomain,

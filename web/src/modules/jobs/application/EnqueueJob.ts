@@ -3,7 +3,6 @@ import { BackgroundJob } from "../domain/BackgroundJob.ts";
 import type { JobPublisher } from "./JobQueue.ts";
 
 export interface EnqueueJobInput {
-  /** ID cố định để queue bỏ qua job trùng (ví dụ khi handler retry). Không được chứa ":". */
   jobId?: string;
   jobName: string;
   payload: Record<string, unknown>;

@@ -1,5 +1,11 @@
 import type { Product } from "../domain/Product.ts";
 
+export interface ProductTypeSummary {
+    productType: string;
+    productCount: number;
+    withImageCount: number;
+}
+
 export interface ProductRepository {
     upsertMany(
         shopDomain: string,
@@ -7,4 +13,6 @@ export interface ProductRepository {
     ): Promise<void>;
 
     listByShop(shopDomain: string): Promise<Product[]>;
+
+    listProductTypes(shopDomain: string): Promise<ProductTypeSummary[]>;
 }

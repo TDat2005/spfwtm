@@ -91,6 +91,7 @@ describe("SyncCatalogPage", () => {
   const products: ProductRepository = {
     upsertMany: vi.fn().mockResolvedValue(undefined),
     listByShop: vi.fn(),
+    listProductTypes: vi.fn(),
   };
 
   it("lưu trang hiện tại rồi xếp trang kế khi còn cursor", async () => {

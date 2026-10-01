@@ -41,10 +41,6 @@ export interface WatermarkConfigurationProps {
   strokeWidth?: number;
 }
 
-/**
- * Value Object: toàn bộ cấu hình cần để tái tạo chính xác một watermark.
- * Object này bất biến; mọi luật cấu hình được kiểm tra tại một chỗ.
- */
 export class WatermarkConfiguration {
   readonly type: WatermarkType;
   readonly text: string | null;

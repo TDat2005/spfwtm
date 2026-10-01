@@ -11,8 +11,6 @@ export class BullMqCatalogSyncQueue implements CatalogSyncQueue {
   async enqueuePage(input: CatalogSyncPageInput): Promise<void> {
     await this.enqueueJob.execute({
       ...CATALOG_SYNC_PAGE_V1,
-      // jobId cố định theo (sync, trang): nếu job trang trước retry sau khi đã
-      // xếp trang kế, BullMQ bỏ qua bản trùng thay vì chạy hai lần.
       jobId: `catalog-sync-${input.syncId}-${input.page}`,
       payload: {
         shopDomain: input.shopDomain,

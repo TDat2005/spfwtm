@@ -13,9 +13,10 @@ import { ListWatermarkBatches } from "../application/ListWatermarkBatches.ts";
 import { ListWatermarkJobs } from "../application/ListWatermarkJobs.ts";
 import { ProcessWatermarkJob } from "../application/ProcessWatermarkJob.ts";
 import { RetryWatermarkJob } from "../application/RetryWatermarkJob.ts";
+import type { WatermarkBatchSelection } from "../application/BulkWatermarkPorts.ts";
 import type { WatermarkJob } from "../domain/WatermarkJob.ts";
 import {
-  ProductIdsPipe,
+  BatchSelectionPipe,
   WatermarkConfigurationPipe,
   type WatermarkConfigurationInput,
 } from "./WatermarkPipes.ts";
@@ -57,17 +58,24 @@ export class WatermarkController {
 
   @Post("batches")
   async createBatch(
-    @Body("productIds", ProductIdsPipe) productIds: string[],
+    @Body(BatchSelectionPipe) selection: WatermarkBatchSelection,
     @Body(WatermarkConfigurationPipe) configuration: WatermarkConfigurationInput,
     @ShopifySession() session: Session,
   ) {
     try {
       const batch = await this.createWatermarkBatch.execute({
         shopDomain: session.shop,
-        productIds,
+        selection,
         configuration,
       });
-      return { batch: { id: batch.id, totalJobs: batch.totalJobs, createdAt: batch.createdAt } };
+      return {
+        batch: {
+          id: batch.id,
+          totalJobs: batch.totalJobs,
+          skippedProducts: batch.skippedProducts,
+          createdAt: batch.createdAt,
+        },
+      };
     } catch (error) {
       throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }

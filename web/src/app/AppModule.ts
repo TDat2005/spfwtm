@@ -10,10 +10,6 @@ import { ShopifyModule } from "../shared/nest/ShopifyModule.ts";
 import { ProductsModule } from "./products/ProductsModule.ts";
 import { SpaModule } from "./SpaModule.ts";
 
-/**
- * Module gốc: chỉ ghép các feature module lại với nhau.
- * Mỗi feature module tự khai báo controller, provider và dependency của nó.
- */
 @Module({
   imports: [
     PrismaModule,
@@ -25,7 +21,7 @@ import { SpaModule } from "./SpaModule.ts";
     ProductMediaSyncModule,
     PublicationModule,
     ProductsModule,
-    SpaModule, // luôn để cuối, xem SpaModule.ts
+    SpaModule,
   ],
 })
 export class AppModule {}

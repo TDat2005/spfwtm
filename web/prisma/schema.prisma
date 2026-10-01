@@ -52,6 +52,7 @@ model CatalogProduct {
   shopifyProductId String               @db.VarChar(255)
   title            String               @db.VarChar(255)
   status           CatalogProductStatus
+  productType      String               @default("") @db.VarChar(255)
   imageUrl         String?              @db.Text
   imageAltText     String?              @db.Text
 
@@ -69,6 +70,7 @@ model CatalogProduct {
 
   @@unique([shopId, shopifyProductId])
   @@index([shopId, deletedAt])
+  @@index([shopId, productType])
   @@map("catalog_products")
 }
 

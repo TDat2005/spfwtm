@@ -195,6 +195,7 @@ export class PrismaWebhookInboxRepository
           data: {
             title: input.product.title,
             status: input.product.status,
+            productType: input.product.productType,
             deletedAt: null,
           },
         });
@@ -324,6 +325,7 @@ async function ensureCatalogProduct(
       shopifyProductId: product.productId,
       title: product.title,
       status: product.status,
+      productType: product.productType,
       imageUrl: null,
       imageAltText: null,
     },

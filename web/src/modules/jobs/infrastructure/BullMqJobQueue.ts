@@ -9,7 +9,6 @@ interface BullMqJobQueueOptions {
   prefix?: string;
 }
 
-/** Producer adapter: chuyển BackgroundJob của application thành BullMQ job. */
 export class BullMqJobQueue implements JobPublisher {
   private readonly queue: Queue<Record<string, unknown>>;
 

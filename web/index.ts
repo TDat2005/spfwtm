@@ -21,12 +21,8 @@ const STATIC_PATH =
     : `${process.cwd()}/frontend/`;
 
 async function bootstrap(): Promise<void> {
-  // NestFactory.create quét toàn bộ module và tạo sẵn mọi provider (DI).
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  // OAuth và webhook của Shopify cần body thô (raw) để kiểm tra chữ ký HMAC,
-  // nên gắn thẳng vào Express trước khi app.init() đăng ký JSON body parser của Nest.
-  // Dùng http.get/http.post (khớp đúng path + method), không dùng app.use (khớp tiền tố).
   const http = app.getHttpAdapter().getInstance() as Express;
   http.get(shopify.config.auth.path, shopify.auth.begin());
   http.get(
@@ -52,8 +48,6 @@ async function bootstrap(): Promise<void> {
     return ensureInstalled(request, response, next);
   });
 
-  // Nest bắt SIGINT/SIGTERM và gọi các lifecycle hook (dừng worker BullMQ,
-  // đóng Redis, ngắt Prisma) theo đúng thứ tự.
   app.enableShutdownHooks();
 
   try {

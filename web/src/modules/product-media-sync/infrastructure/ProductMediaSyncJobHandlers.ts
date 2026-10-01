@@ -20,11 +20,6 @@ import { ReconcileProductMedia } from "../application/ReconcileProductMedia.ts";
 import { PrismaWebhookInboxRepository } from "./PrismaWebhookInboxRepository.ts";
 import { ShopifyProductMediaGateway } from "./ShopifyProductMediaGateway.ts";
 
-/**
- * Đăng ký handler cho job đồng bộ media sản phẩm và lịch reconcile hằng ngày.
- * onModuleInit: đăng ký handler (trước khi JobsModule start worker).
- * onApplicationBootstrap: đăng ký cron với Redis.
- */
 @Injectable()
 export class ProductMediaSyncJobHandlers implements OnModuleInit, OnApplicationBootstrap {
   private readonly logger = new Logger("BullMQ");
@@ -51,7 +46,6 @@ export class ProductMediaSyncJobHandlers implements OnModuleInit, OnApplicationB
   }
 
   onApplicationBootstrap(): void {
-    // Không await: Redis chậm cũng không chặn app khởi động.
     void this.queue
       .upsertDailyJob(
         CATALOG_RECONCILE_V1,

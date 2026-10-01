@@ -11,7 +11,6 @@ interface ShopifyOfflineSessions extends ShopifyApiContext {
   };
 }
 
-/** Tạo gateway từ offline session của shop, dùng được trong job chạy nền. */
 export class ShopifyProductGatewayFactory implements ProductGatewayFactory {
   constructor(private readonly shopify: ShopifyOfflineSessions) {}
 

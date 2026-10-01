@@ -5,7 +5,6 @@ import type {
   CatalogSyncState,
 } from "./CatalogSyncPorts.ts";
 
-/** Sync RUNNING mà không có heartbeat trong khoảng này được coi là đã chết. */
 const STALE_SYNC_MS = 15 * 60 * 1000;
 
 export class StartCatalogSync {
@@ -26,7 +25,6 @@ export class StartCatalogSync {
       new Date(Date.now() - STALE_SYNC_MS),
     );
 
-    // Đang có sync chạy: trả về trạng thái hiện tại thay vì chạy song song.
     if (!started) return this.repository.getState(shopDomain);
 
     try {

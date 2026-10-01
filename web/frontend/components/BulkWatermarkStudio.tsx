@@ -17,11 +17,13 @@ import {
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "react-query";
+import { WatermarkPreview, type WatermarkStyle } from "./WatermarkPreview";
 
 interface ProductDto extends Record<string, unknown> {
   id: string;
   title: string;
   status: "ACTIVE" | "DRAFT" | "ARCHIVED";
+  productType: string;
   imageUrl: string | null;
   imageAltText: string | null;
   needsReview: boolean;
@@ -31,6 +33,22 @@ interface ProductDto extends Record<string, unknown> {
 interface CatalogResponse {
   products: ProductDto[];
 }
+
+interface ProductTypeDto {
+  productType: string;
+  productCount: number;
+  withImageCount: number;
+}
+
+interface ProductTypesResponse {
+  productTypes: ProductTypeDto[];
+}
+
+type BatchSelection = { productIds: string[] } | { productType: string };
+
+const ALL_TYPES = "all";
+const typeValue = (productType: string) => `type:${productType}`;
+const typeLabel = (productType: string) => productType || "Chưa phân loại";
 
 type BatchStatus =
   | "QUEUED"
@@ -60,6 +78,7 @@ interface CreateBatchResponse {
   batch: {
     id: string;
     totalJobs: number;
+    skippedProducts: number;
     createdAt: string;
   };
 }
@@ -80,11 +99,28 @@ const positionOptions = [
   { label: "Góc dưới phải", value: "BOTTOM_RIGHT" },
 ];
 
+const DEFAULT_WATERMARK_STYLE: Omit<
+  WatermarkStyle,
+  "watermarkType" | "text" | "logoUrl" | "position" | "opacity"
+> = {
+  layout: "SINGLE",
+  logoScale: 0.2,
+  rotation: 0,
+  offsetX: 0,
+  offsetY: 0,
+  fontFamily: "Arial",
+  fontSize: 0.045,
+  textColor: "#FFFFFF",
+  strokeColor: "#000000",
+  strokeWidth: 2,
+};
+
 export function BulkWatermarkStudio() {
   const shopify = useAppBridge();
   const queryClient = useQueryClient();
   const [scope, setScope] = useState("all");
   const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState(ALL_TYPES);
   const [watermarkType, setWatermarkType] = useState<"TEXT" | "IMAGE">("TEXT");
   const [text, setText] = useState("© My Store");
   const [logoUrl, setLogoUrl] = useState("");
@@ -96,6 +132,17 @@ export function BulkWatermarkStudio() {
     () => fetchJson<CatalogResponse>("/api/catalog/products"),
     { refetchOnWindowFocus: false, refetchInterval: 5_000 }
   );
+  const productTypes = useQuery<ProductTypesResponse, Error>(
+    ["catalogProductTypes"],
+    () => fetchJson<ProductTypesResponse>("/api/catalog/product-types"),
+    { refetchOnWindowFocus: false }
+  );
+  const selectedType =
+    typeFilter === ALL_TYPES
+      ? null
+      : (productTypes.data?.productTypes ?? []).find(
+          (type) => typeValue(type.productType) === typeFilter
+        ) ?? null;
   const batches = useQuery<BatchesResponse, Error>(
     ["watermarkBatches"],
     () => fetchJson<BatchesResponse>("/api/watermarks/batches"),
@@ -117,11 +164,16 @@ export function BulkWatermarkStudio() {
       .filter((product) => scope === "all" || product.needsReview)
       .filter(
         (product) =>
+          typeFilter === ALL_TYPES ||
+          typeValue(product.productType) === typeFilter
+      )
+      .filter(
+        (product) =>
           !normalizedSearch ||
           product.title.toLocaleLowerCase("vi").includes(normalizedSearch)
       )
       .slice(0, 1_000);
-  }, [catalog.data?.products, scope, search]);
+  }, [catalog.data?.products, scope, search, typeFilter]);
 
   const {
     selectedResources,
@@ -136,40 +188,45 @@ export function BulkWatermarkStudio() {
     visibleIds.has(id)
   );
 
-  const createBatch = useMutation<CreateBatchResponse, Error>(
-    async () => {
+  const watermarkStyle: WatermarkStyle = {
+    ...DEFAULT_WATERMARK_STYLE,
+    watermarkType,
+    text,
+    logoUrl,
+    position,
+    opacity: opacityPercent / 100,
+  };
+  const previewProduct =
+    eligibleProducts.find((product) => product.id === selectedProductIds[0]) ??
+    eligibleProducts[0] ??
+    null;
+
+  const createBatch = useMutation<CreateBatchResponse, Error, BatchSelection>(
+    async (selection) => {
       return await fetchJson<CreateBatchResponse>("/api/watermarks/batches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          productIds: selectedProductIds,
-          watermarkType,
+          ...selection,
+          ...watermarkStyle,
           text: watermarkType === "TEXT" ? text : null,
           logoUrl: watermarkType === "IMAGE" ? logoUrl : null,
-          position,
-          opacity: opacityPercent / 100,
-          layout: "SINGLE",
-          logoScale: 0.2,
-          rotation: 0,
-          offsetX: 0,
-          offsetY: 0,
-          fontFamily: "Arial",
-          fontSize: 0.045,
-          textColor: "#FFFFFF",
-          strokeColor: "#000000",
-          strokeWidth: 2,
         }),
       });
     },
     {
-      onSuccess: async () => {
+      onSuccess: async ({ batch }) => {
         clearSelection();
         await Promise.all([
           queryClient.invalidateQueries(["watermarkBatches"]),
           queryClient.invalidateQueries(["watermarkJobs"]),
           queryClient.invalidateQueries(["catalogProducts"]),
         ]);
-        shopify.toast.show("Đã tạo batch watermark, đang xử lý ngầm");
+        shopify.toast.show(
+          batch.skippedProducts > 0
+            ? `Đã tạo batch ${batch.totalJobs} ảnh, bỏ qua ${batch.skippedProducts} sản phẩm không có ảnh`
+            : `Đã tạo batch ${batch.totalJobs} ảnh, đang xử lý ngầm`
+        );
       },
       onError: (error) => {
         shopify.toast.show(`Không tạo được batch: ${error.message}`, {
@@ -206,6 +263,11 @@ export function BulkWatermarkStudio() {
   const canCreate =
     selectedProductIds.length > 0 &&
     selectedProductIds.length <= 1_000 &&
+    configurationValid;
+  const canCreateForType =
+    selectedType !== null &&
+    selectedType.withImageCount > 0 &&
+    selectedType.withImageCount <= 5_000 &&
     configurationValid;
 
   const batchRows = (batches.data?.batches ?? []).map((batch) => {
@@ -254,8 +316,9 @@ export function BulkWatermarkStudio() {
               Bulk Watermark
             </Text>
             <Text as="p" variant="bodyMd" color="subdued">
-              Chọn tối đa 1.000 sản phẩm và xử lý theo batch. Ảnh hoàn tất chỉ
-              được lưu trong app, chưa tự đăng lên Shopify.
+              Chọn tối đa 1.000 sản phẩm, hoặc chọn một loại sản phẩm để
+              watermark cả loại (tối đa 5.000). Ảnh hoàn tất chỉ được lưu trong
+              app, chưa tự đăng lên Shopify.
             </Text>
           </div>
 
@@ -283,6 +346,21 @@ export function BulkWatermarkStudio() {
               onChange={(value) => {
                 clearSelection();
                 setScope(value);
+              }}
+            />
+            <Select
+              label="Loại sản phẩm"
+              options={[
+                { label: "Tất cả loại", value: ALL_TYPES },
+                ...(productTypes.data?.productTypes ?? []).map((type) => ({
+                  label: `${typeLabel(type.productType)} (${type.withImageCount.toLocaleString("vi-VN")} có ảnh)`,
+                  value: typeValue(type.productType),
+                })),
+              ]}
+              value={typeFilter}
+              onChange={(value) => {
+                clearSelection();
+                setTypeFilter(value);
               }}
             />
             <TextField
@@ -395,20 +473,54 @@ export function BulkWatermarkStudio() {
             }
           />
 
+          <Stack vertical spacing="extraTight">
+            <Text as="h3" variant="headingSm">
+              Xem trước
+            </Text>
+            <WatermarkPreview
+              imageUrl={previewProduct?.imageUrl ?? null}
+              productTitle={previewProduct?.title}
+              style={watermarkStyle}
+            />
+          </Stack>
+
           <Stack distribution="equalSpacing" alignment="center">
             <Text as="span" variant="bodyMd">
               Đã chọn {selectedProductIds.length.toLocaleString("vi-VN")} /
               1.000 sản phẩm
             </Text>
-            <Button
-              primary
-              loading={createBatch.isLoading}
-              disabled={!canCreate || createBatch.isLoading}
-              onClick={() => createBatch.mutate()}
-            >
-              Tạo batch watermark
-            </Button>
+            <Stack spacing="tight">
+              {selectedType && (
+                <Button
+                  loading={createBatch.isLoading}
+                  disabled={!canCreateForType || createBatch.isLoading}
+                  onClick={() =>
+                    createBatch.mutate({ productType: selectedType.productType })
+                  }
+                >
+                  {`Watermark cả loại "${typeLabel(selectedType.productType)}" (${selectedType.withImageCount.toLocaleString("vi-VN")})`}
+                </Button>
+              )}
+              <Button
+                primary
+                loading={createBatch.isLoading}
+                disabled={!canCreate || createBatch.isLoading}
+                onClick={() =>
+                  createBatch.mutate({ productIds: selectedProductIds })
+                }
+              >
+                Tạo batch watermark
+              </Button>
+            </Stack>
           </Stack>
+          {selectedType && selectedType.withImageCount > 5_000 && (
+            <Banner status="warning" title="Loại này có quá nhiều sản phẩm">
+              <p>
+                Mỗi batch theo loại tối đa 5.000 sản phẩm. Hãy chọn tay từng
+                phần sản phẩm.
+              </p>
+            </Banner>
+          )}
         </Stack>
       </Card>
 
@@ -479,7 +591,6 @@ async function fetchJson<T = unknown>(
       const body = (await response.json()) as { error?: string };
       if (body.error) message = body.error;
     } catch {
-      // Giữ lỗi HTTP khi body không phải JSON.
     }
     throw new Error(message);
   }

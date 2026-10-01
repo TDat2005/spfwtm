@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 @Controller()
 export class SpaController {
-  // Mọi đường dẫn không khớp route API nào sẽ trả về index.html của React.
   @All("{*path}")
   @Header("Content-Type", "text/html")
   serve(): string {

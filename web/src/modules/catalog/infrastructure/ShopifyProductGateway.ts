@@ -22,6 +22,7 @@ interface ShopifyProductNode {
   id: string;
   title: string;
   status: string;
+  productType: string;
   featuredMedia: {
     id: string;
     preview: {
@@ -43,7 +44,6 @@ interface GetProductsResponse {
   };
 }
 
-/** Tối đa của Shopify cho một connection. Query này rẻ nên lấy đủ 250. */
 const PAGE_SIZE = 250;
 
 export class ShopifyProductGateway implements ProductGateway {
@@ -57,8 +57,6 @@ export class ShopifyProductGateway implements ProductGateway {
       session: this.session,
     });
 
-    // sortKey: ID giữ thứ tự ổn định giữa các trang; sort theo UPDATED_AT có thể
-    // làm sản phẩm vừa sửa nhảy trang và bị bỏ sót.
     const result: { data?: GetProductsResponse } =
       await client.request<GetProductsResponse>(
         `
@@ -68,6 +66,7 @@ export class ShopifyProductGateway implements ProductGateway {
             id
             title
             status
+            productType
             featuredMedia {
               id
               preview {
@@ -85,7 +84,6 @@ export class ShopifyProductGateway implements ProductGateway {
         }
       }
     `,
-        // Client tự retry khi Shopify trả 429/5xx; lỗi khác để BullMQ retry cả job.
         { variables: { cursor }, retries: 2 }
       );
     if (!result.data) {
@@ -101,6 +99,7 @@ export class ShopifyProductGateway implements ProductGateway {
           id: node.id,
           title: node.title,
           status: parseProductStatus(node.status),
+          productType: node.productType,
           imageUrl: image?.url ?? null,
           imageAltText: image?.altText ?? null,
           mediaId: node.featuredMedia?.id ?? null,

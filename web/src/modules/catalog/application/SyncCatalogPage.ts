@@ -6,11 +6,6 @@ import type {
   CatalogSyncRepository,
 } from "./CatalogSyncPorts.ts";
 
-/**
- * Đồng bộ một trang sản phẩm rồi xếp job cho trang kế tiếp.
- * Mỗi trang là một job riêng: shop lớn không bị giới hạn số sản phẩm,
- * job retry chỉ chạy lại đúng trang lỗi, và job của các shop khác được xen kẽ.
- */
 export class SyncCatalogPage {
   constructor(
     private readonly gateways: ProductGatewayFactory,

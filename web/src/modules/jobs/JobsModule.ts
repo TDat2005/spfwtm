@@ -55,12 +55,10 @@ export class JobsModule
     @Inject(BullMqWorker) private readonly worker: BullMqWorker,
   ) {}
 
-  // Các module khác đăng ký handler trong onModuleInit, luôn chạy trước hook này.
   onApplicationBootstrap(): void {
     this.worker.start();
   }
 
-  // Chờ job đang chạy xong trước khi Nest đóng HTTP server và Prisma.
   async beforeApplicationShutdown(): Promise<void> {
     await this.worker.stop();
   }

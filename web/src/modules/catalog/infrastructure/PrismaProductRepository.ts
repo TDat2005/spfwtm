@@ -1,7 +1,10 @@
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 
 import { Product } from "../domain/Product.ts";
-import type { ProductRepository } from "../application/ProductRepository.ts";
+import type {
+  ProductRepository,
+  ProductTypeSummary,
+} from "../application/ProductRepository.ts";
 
 export class PrismaProductRepository implements ProductRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -21,7 +24,6 @@ export class PrismaProductRepository implements ProductRepository {
         update: {},
       });
 
-      // Một query đọc cho cả trang thay vì findUnique từng sản phẩm.
       const existingRows = await transaction.catalogProduct.findMany({
         where: {
           shopId: shop.id,
@@ -49,6 +51,7 @@ export class PrismaProductRepository implements ProductRepository {
               shopifyProductId: product.id,
               title: product.title,
               status: product.status,
+              productType: product.productType,
               imageUrl: product.imageUrl,
               imageAltText: product.imageAltText,
               sourceMediaId: product.mediaId,
@@ -60,6 +63,7 @@ export class PrismaProductRepository implements ProductRepository {
             data: {
               title: product.title,
               status: product.status,
+              productType: product.productType,
               deletedAt: null,
               ...(existing.sourceMediaId
                 ? {}
@@ -73,9 +77,35 @@ export class PrismaProductRepository implements ProductRepository {
         }
       }
     }, {
-      // Mặc định 5s không đủ cho một trang 250 sản phẩm.
       timeout: 30_000,
     });
+  }
+
+  async listProductTypes(shopDomain: string): Promise<ProductTypeSummary[]> {
+    const where = { shop: { domain: shopDomain }, deletedAt: null };
+    const [all, withImage] = await Promise.all([
+      this.prisma.catalogProduct.groupBy({
+        by: ["productType"],
+        where,
+        _count: { _all: true },
+      }),
+      this.prisma.catalogProduct.groupBy({
+        by: ["productType"],
+        where: { ...where, imageUrl: { not: null } },
+        _count: { _all: true },
+      }),
+    ]);
+    const withImageByType = new Map(
+      withImage.map((row) => [row.productType, row._count._all])
+    );
+
+    return all
+      .map((row) => ({
+        productType: row.productType,
+        productCount: row._count._all,
+        withImageCount: withImageByType.get(row.productType) ?? 0,
+      }))
+      .sort((a, b) => a.productType.localeCompare(b.productType, "vi"));
   }
 
   async listByShop(shopDomain: string): Promise<Product[]> {
@@ -97,6 +127,7 @@ export class PrismaProductRepository implements ProductRepository {
           id: row.shopifyProductId,
           title: row.title,
           status: row.status,
+          productType: row.productType,
           imageUrl: row.imageUrl,
           imageAltText: row.imageAltText,
           mediaId: row.sourceMediaId,

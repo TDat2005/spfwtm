@@ -27,7 +27,6 @@ import { WatermarkController } from "./presentation/WatermarkController.ts";
 const WATERMARK_JOB_REPOSITORY = Symbol("WATERMARK_JOB_REPOSITORY");
 const WATERMARK_BATCH_REPOSITORY = Symbol("WATERMARK_BATCH_REPOSITORY");
 
-/** Provider cho use case chỉ cần đúng một repository. */
 function useCaseWith<R, T>(token: symbol, useCase: new (repository: R) => T) {
   return {
     provide: useCase,

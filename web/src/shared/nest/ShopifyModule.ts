@@ -15,8 +15,6 @@ import { SHOPIFY } from "./tokens.ts";
 })
 export class ShopifyModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    // Mọi request /api phải có session hợp lệ; middleware gắn session vào
-    // response.locals.shopify.session để decorator @ShopifySession() đọc ra.
     consumer
       .apply(shopify.validateAuthenticatedSession())
       .forRoutes({ path: "api/{*path}", method: RequestMethod.ALL });
