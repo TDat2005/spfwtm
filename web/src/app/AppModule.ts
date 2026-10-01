@@ -1,26 +1,31 @@
-import { Module, type DynamicModule } from "@nestjs/common";
-import { APP_DEPENDENCIES, type AppDependencies } from "./AppDependencies.ts";
-import { CatalogController } from "../modules/catalog/presentation/CatalogController.ts";
-import { MediaController } from "../modules/media/presentation/MediaController.ts";
-import { WatermarkController } from "../modules/watermark/presentation/WatermarkController.ts";
-import { PublicationController } from "../modules/shopify-publication/presentation/PublicationController.ts";
-import { ProductsController } from "./ProductsController.ts";
-import { SpaController } from "./SpaController.ts";
+import { Module } from "@nestjs/common";
+import { CatalogModule } from "../modules/catalog/CatalogModule.ts";
+import { JobsModule } from "../modules/jobs/JobsModule.ts";
+import { MediaModule } from "../modules/media/MediaModule.ts";
+import { ProductMediaSyncModule } from "../modules/product-media-sync/ProductMediaSyncModule.ts";
+import { PublicationModule } from "../modules/shopify-publication/PublicationModule.ts";
+import { WatermarkModule } from "../modules/watermark/WatermarkModule.ts";
+import { PrismaModule } from "../shared/nest/PrismaModule.ts";
+import { ShopifyModule } from "../shared/nest/ShopifyModule.ts";
+import { ProductsModule } from "./products/ProductsModule.ts";
+import { SpaModule } from "./SpaModule.ts";
 
-@Module({})
-export class AppModule {
-  static register(dependencies: AppDependencies): DynamicModule {
-    return {
-      module: AppModule,
-      providers: [{ provide: APP_DEPENDENCIES, useValue: dependencies }],
-      controllers: [
-        CatalogController,
-        MediaController,
-        WatermarkController,
-        PublicationController,
-        ProductsController,
-        SpaController,
-      ],
-    };
-  }
-}
+/**
+ * Module gốc: chỉ ghép các feature module lại với nhau.
+ * Mỗi feature module tự khai báo controller, provider và dependency của nó.
+ */
+@Module({
+  imports: [
+    PrismaModule,
+    ShopifyModule,
+    JobsModule,
+    CatalogModule,
+    MediaModule,
+    WatermarkModule,
+    ProductMediaSyncModule,
+    PublicationModule,
+    ProductsModule,
+    SpaModule, // luôn để cuối, xem SpaModule.ts
+  ],
+})
+export class AppModule {}

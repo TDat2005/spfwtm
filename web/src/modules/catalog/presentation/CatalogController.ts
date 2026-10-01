@@ -1,30 +1,34 @@
-import { Controller, Get, Inject, Post, Res } from "@nestjs/common";
-import { APP_DEPENDENCIES, type AppDependencies } from "../../../app/AppDependencies.ts";
-import { routeError, type ShopifyResponse } from "../../../app/ShopifyResponse.ts";
+import { Controller, Get, HttpCode, HttpStatus, Inject, Post } from "@nestjs/common";
+import type { Session } from "@shopify/shopify-api";
+import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
+import { toHttpException } from "../../../shared/nest/toHttpException.ts";
+import { ListProducts } from "../application/ListProducts.ts";
+import { SyncCatalogFactory } from "../infrastructure/SyncCatalogFactory.ts";
 
 @Controller("api/catalog")
 export class CatalogController {
-  constructor(@Inject(APP_DEPENDENCIES) private readonly dependencies: AppDependencies) {}
+  constructor(
+    @Inject(ListProducts) private readonly listProducts: ListProducts,
+    @Inject(SyncCatalogFactory) private readonly syncCatalog: SyncCatalogFactory,
+  ) {}
 
   @Get("products")
-  async list(@Res() response: ShopifyResponse): Promise<void> {
+  async list(@ShopifySession() session: Session) {
     try {
-      const session = response.locals.shopify.session;
-      const products = await this.dependencies.createListProducts().execute(session.shop);
-      response.status(200).send({ products });
+      const products = await this.listProducts.execute(session.shop);
+      return { products };
     } catch (error) {
-      routeError(response, "Catalog", error, 500, "Không xử lý được catalog");
+      throw toHttpException("Catalog", error, HttpStatus.INTERNAL_SERVER_ERROR, "Không xử lý được catalog");
     }
   }
 
   @Post("sync")
-  async sync(@Res() response: ShopifyResponse): Promise<void> {
+  @HttpCode(HttpStatus.OK)
+  async sync(@ShopifySession() session: Session) {
     try {
-      const session = response.locals.shopify.session;
-      const result = await this.dependencies.createSyncCatalog(session).execute(session.shop);
-      response.status(200).send(result);
+      return await this.syncCatalog.create(session).execute(session.shop);
     } catch (error) {
-      routeError(response, "Catalog", error, 500, "Không xử lý được catalog");
+      throw toHttpException("Catalog", error, HttpStatus.INTERNAL_SERVER_ERROR, "Không xử lý được catalog");
     }
   }
 }

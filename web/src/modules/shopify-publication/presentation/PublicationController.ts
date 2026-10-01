@@ -1,54 +1,57 @@
-import { Body, Controller, Get, Inject, Param, Post, Res } from "@nestjs/common";
-import { APP_DEPENDENCIES, type AppDependencies } from "../../../app/AppDependencies.ts";
-import { routeError, type ShopifyResponse } from "../../../app/ShopifyResponse.ts";
+import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Param, Post } from "@nestjs/common";
+import type { Session } from "@shopify/shopify-api";
+import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
+import { toHttpException } from "../../../shared/nest/toHttpException.ts";
+import { ListPublishedMedia } from "../application/ListPublishedMedia.ts";
 import type { PublishedMedia } from "../domain/PublishedMedia.ts";
+import { PublicationUseCaseFactory } from "../infrastructure/PublicationUseCaseFactory.ts";
 
 @Controller("api/publications")
 export class PublicationController {
-  constructor(@Inject(APP_DEPENDENCIES) private readonly dependencies: AppDependencies) {}
+  constructor(
+    @Inject(ListPublishedMedia) private readonly listPublishedMedia: ListPublishedMedia,
+    @Inject(PublicationUseCaseFactory) private readonly useCases: PublicationUseCaseFactory,
+  ) {}
 
   @Get()
-  async list(@Res() response: ShopifyResponse): Promise<void> {
+  async list(@ShopifySession() session: Session) {
     try {
-      const publications = await this.dependencies.listPublishedMedia.execute(
-        response.locals.shopify.session.shop,
-      );
-      response.status(200).send({ publications: publications.map(toResponse) });
+      const publications = await this.listPublishedMedia.execute(session.shop);
+      return { publications: publications.map(toResponse) };
     } catch (error) {
-      routeError(response, "Publication", error);
+      throw toHttpException("Publication", error);
     }
   }
 
   @Post("jobs/:jobId")
   async publish(
     @Param("jobId") jobId: string,
-    @Body() body: { altText?: unknown },
-    @Res() response: ShopifyResponse,
-  ): Promise<void> {
+    @Body("altText") altText: unknown,
+    @ShopifySession() session: Session,
+  ) {
     try {
-      const session = response.locals.shopify.session;
-      const publishedMedia = await this.dependencies.createPublishWatermarkedImage(session).execute({
+      const publishedMedia = await this.useCases.publishWatermarkedImage(session).execute({
         watermarkJobId: jobId,
         shopDomain: session.shop,
-        altText: String(body.altText ?? "Product image with watermark"),
+        altText: String(altText ?? "Product image with watermark"),
       });
-      response.status(201).send({ publishedMedia: toResponse(publishedMedia) });
+      return { publishedMedia: toResponse(publishedMedia) };
     } catch (error) {
-      routeError(response, "Publication", error);
+      throw toHttpException("Publication", error);
     }
   }
 
   @Post("jobs/:jobId/restore")
-  async restore(@Param("jobId") jobId: string, @Res() response: ShopifyResponse): Promise<void> {
+  @HttpCode(HttpStatus.OK)
+  async restore(@Param("jobId") jobId: string, @ShopifySession() session: Session) {
     try {
-      const session = response.locals.shopify.session;
-      const result = await this.dependencies.createRestoreOriginalImage(session).execute({
+      const result = await this.useCases.restoreOriginalImage(session).execute({
         watermarkJobId: jobId,
         shopDomain: session.shop,
       });
-      response.status(200).send({ success: true, result });
+      return { success: true, result };
     } catch (error) {
-      routeError(response, "Publication", error);
+      throw toHttpException("Publication", error);
     }
   }
 }

@@ -13,23 +13,29 @@ function requireEnvironment(name: string): string {
     return value;
 }
 
-const databasePort = Number(
-    requireEnvironment("DATABASE_PORT"),
-);
+/**
+ * Tạo PrismaClient khi Nest khởi tạo PrismaModule, thay vì ngay lúc import file.
+ * Nhờ vậy test có thể import controller mà không cần biến môi trường database.
+ */
+export function createPrismaClient(): PrismaClient {
+    const databasePort = Number(
+        requireEnvironment("DATABASE_PORT"),
+    );
 
-if (!Number.isInteger(databasePort)) {
-    throw new Error("DATABASE_PORT phải là số nguyên");
+    if (!Number.isInteger(databasePort)) {
+        throw new Error("DATABASE_PORT phải là số nguyên");
+    }
+
+    const adapter = new PrismaMariaDb({
+        host: requireEnvironment("DATABASE_HOST"),
+        port: databasePort,
+        user: requireEnvironment("DATABASE_USER"),
+        password: requireEnvironment("DATABASE_PASSWORD"),
+        database: requireEnvironment("DATABASE_NAME"),
+        connectionLimit: 5,
+    });
+
+    return new PrismaClient({
+        adapter,
+    });
 }
-
-const adapter = new PrismaMariaDb({
-    host: requireEnvironment("DATABASE_HOST"),
-    port: databasePort,
-    user: requireEnvironment("DATABASE_USER"),
-    password: requireEnvironment("DATABASE_PASSWORD"),
-    database: requireEnvironment("DATABASE_NAME"),
-    connectionLimit: 5,
-});
-
-export const prisma = new PrismaClient({
-    adapter,
-});

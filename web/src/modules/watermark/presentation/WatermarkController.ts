@@ -1,88 +1,100 @@
-import { Body, Controller, Get, Inject, Param, Post, Res } from "@nestjs/common";
-import { APP_DEPENDENCIES, type AppDependencies } from "../../../app/AppDependencies.ts";
-import { routeError, type ShopifyResponse } from "../../../app/ShopifyResponse.ts";
-import type {
-  WatermarkJob,
-  WatermarkFontFamily,
-  WatermarkLayout,
-  WatermarkPosition,
-} from "../domain/WatermarkJob.ts";
+import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Param, Post } from "@nestjs/common";
+import type { Session } from "@shopify/shopify-api";
+import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
+import { toHttpException } from "../../../shared/nest/toHttpException.ts";
+import { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
 import { WATERMARK_PROCESS_V1 } from "../../jobs/domain/JobDefinitions.ts";
-
-const positions = new Set<WatermarkPosition>([
-  "TOP_LEFT", "TOP_CENTER", "TOP_RIGHT", "MIDDLE_LEFT", "CENTER",
-  "MIDDLE_RIGHT", "BOTTOM_LEFT", "BOTTOM_CENTER", "BOTTOM_RIGHT",
-]);
-const layouts = new Set<WatermarkLayout>(["SINGLE", "TILED"]);
+import { CancelWatermarkBatch } from "../application/CancelWatermarkBatch.ts";
+import { CancelWatermarkJob } from "../application/CancelWatermarkJob.ts";
+import { CreateWatermarkBatch } from "../application/CreateWatermarkBatch.ts";
+import { CreateWatermarkJob } from "../application/CreateWatermarkJob.ts";
+import { GetWatermarkJob } from "../application/GetWatermarkJob.ts";
+import { ListWatermarkBatches } from "../application/ListWatermarkBatches.ts";
+import { ListWatermarkJobs } from "../application/ListWatermarkJobs.ts";
+import { ProcessWatermarkJob } from "../application/ProcessWatermarkJob.ts";
+import { RetryWatermarkJob } from "../application/RetryWatermarkJob.ts";
+import type { WatermarkJob } from "../domain/WatermarkJob.ts";
+import {
+  ProductIdsPipe,
+  WatermarkConfigurationPipe,
+  type WatermarkConfigurationInput,
+} from "./WatermarkPipes.ts";
 
 @Controller("api/watermarks")
 export class WatermarkController {
-  constructor(@Inject(APP_DEPENDENCIES) private readonly dependencies: AppDependencies) {}
+  constructor(
+    @Inject(CreateWatermarkJob) private readonly createWatermarkJob: CreateWatermarkJob,
+    @Inject(ListWatermarkJobs) private readonly listWatermarkJobs: ListWatermarkJobs,
+    @Inject(GetWatermarkJob) private readonly getWatermarkJob: GetWatermarkJob,
+    @Inject(RetryWatermarkJob) private readonly retryWatermarkJob: RetryWatermarkJob,
+    @Inject(CancelWatermarkJob) private readonly cancelWatermarkJob: CancelWatermarkJob,
+    @Inject(ProcessWatermarkJob) private readonly processWatermarkJob: ProcessWatermarkJob,
+    @Inject(CreateWatermarkBatch) private readonly createWatermarkBatch: CreateWatermarkBatch,
+    @Inject(ListWatermarkBatches) private readonly listWatermarkBatches: ListWatermarkBatches,
+    @Inject(CancelWatermarkBatch) private readonly cancelWatermarkBatch: CancelWatermarkBatch,
+    @Inject(EnqueueJob) private readonly enqueueJob: EnqueueJob,
+  ) {}
 
   @Get("jobs")
-  async listJobs(@Res() response: ShopifyResponse): Promise<void> {
+  async listJobs(@ShopifySession() session: Session) {
     try {
-      const jobs = await this.dependencies.listWatermarkJobs.execute(response.locals.shopify.session.shop);
-      response.status(200).send({ jobs: jobs.map(toResponse) });
+      const jobs = await this.listWatermarkJobs.execute(session.shop);
+      return { jobs: jobs.map(toResponse) };
     } catch (error) {
-      routeError(response, "Watermark", error);
+      throw toHttpException("Watermark", error);
     }
   }
 
   @Get("batches")
-  async listBatches(@Res() response: ShopifyResponse): Promise<void> {
+  async listBatches(@ShopifySession() session: Session) {
     try {
-      const batches = await this.dependencies.listWatermarkBatches.execute(
-        response.locals.shopify.session.shop,
-      );
-      response.status(200).send({ batches });
+      const batches = await this.listWatermarkBatches.execute(session.shop);
+      return { batches };
     } catch (error) {
-      routeError(response, "Watermark", error);
+      throw toHttpException("Watermark", error);
     }
   }
 
   @Post("batches")
   async createBatch(
-    @Body() body: Record<string, unknown>,
-    @Res() response: ShopifyResponse,
-  ): Promise<void> {
+    @Body("productIds", ProductIdsPipe) productIds: string[],
+    @Body(WatermarkConfigurationPipe) configuration: WatermarkConfigurationInput,
+    @ShopifySession() session: Session,
+  ) {
     try {
-      const rawProductIds = body.productIds;
-      if (!Array.isArray(rawProductIds)) throw new Error("productIds phải là một mảng");
-      const batch = await this.dependencies.createWatermarkBatch.execute({
-        shopDomain: response.locals.shopify.session.shop,
-        productIds: rawProductIds.map(String),
-        configuration: parseConfiguration(body),
+      const batch = await this.createWatermarkBatch.execute({
+        shopDomain: session.shop,
+        productIds,
+        configuration,
       });
-      response.status(201).send({
-        batch: { id: batch.id, totalJobs: batch.totalJobs, createdAt: batch.createdAt },
-      });
+      return { batch: { id: batch.id, totalJobs: batch.totalJobs, createdAt: batch.createdAt } };
     } catch (error) {
-      routeError(response, "Watermark", error, 400);
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }
   }
 
   @Post("batches/:id/cancel")
-  async cancelBatch(@Param("id") id: string, @Res() response: ShopifyResponse): Promise<void> {
+  @HttpCode(HttpStatus.OK)
+  async cancelBatch(@Param("id") id: string, @ShopifySession() session: Session) {
     try {
-      await this.dependencies.cancelWatermarkBatch.execute(id, response.locals.shopify.session.shop);
-      response.status(200).send({ success: true });
+      await this.cancelWatermarkBatch.execute(id, session.shop);
+      return { success: true };
     } catch (error) {
-      routeError(response, "Watermark", error, 400);
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }
   }
 
   @Post("jobs")
   async createJob(
-    @Body() body: Record<string, unknown>,
-    @Res() response: ShopifyResponse,
-  ): Promise<void> {
+    @Body("productId") productId: unknown,
+    @Body(WatermarkConfigurationPipe) configuration: WatermarkConfigurationInput,
+    @ShopifySession() session: Session,
+  ) {
     try {
-      const configuration = parseConfiguration(body);
-      const shopDomain = response.locals.shopify.session.shop;
-      const job = await this.dependencies.createWatermarkJob.execute({
+      const shopDomain = session.shop;
+      const job = await this.createWatermarkJob.execute({
         shopDomain,
-        productId: String(body.productId ?? ""),
+        productId: String(productId ?? ""),
         watermarkType: configuration.type,
         text: configuration.text,
         logoUrl: configuration.logoUrl,
@@ -99,90 +111,63 @@ export class WatermarkController {
         strokeColor: configuration.strokeColor,
         strokeWidth: configuration.strokeWidth,
       });
-      await this.dependencies.enqueueJob.execute({
+      await this.enqueueJob.execute({
         ...WATERMARK_PROCESS_V1,
         payload: { jobId: job.id, shopDomain },
       });
-      response.status(201).send({ job: toResponse(job) });
+      return { job: toResponse(job) };
     } catch (error) {
-      routeError(response, "Watermark", error, 400);
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }
   }
 
   @Get("jobs/:id")
-  async getJob(@Param("id") id: string, @Res() response: ShopifyResponse): Promise<void> {
+  async getJob(@Param("id") id: string, @ShopifySession() session: Session) {
     try {
-      const job = await this.dependencies.getWatermarkJob.execute(id, response.locals.shopify.session.shop);
-      response.status(200).send({ job: toResponse(job) });
+      const job = await this.getWatermarkJob.execute(id, session.shop);
+      return { job: toResponse(job) };
     } catch (error) {
-      routeError(response, "Watermark", error, 404);
+      throw toHttpException("Watermark", error, HttpStatus.NOT_FOUND);
     }
   }
 
   @Post("jobs/:id/retry")
-  async retryJob(@Param("id") id: string, @Res() response: ShopifyResponse): Promise<void> {
+  @HttpCode(HttpStatus.ACCEPTED)
+  async retryJob(@Param("id") id: string, @ShopifySession() session: Session) {
     try {
-      const shopDomain = response.locals.shopify.session.shop;
-      const job = await this.dependencies.retryWatermarkJob.execute(id, shopDomain);
-      await this.dependencies.enqueueJob.execute({
+      const shopDomain = session.shop;
+      const job = await this.retryWatermarkJob.execute(id, shopDomain);
+      await this.enqueueJob.execute({
         ...WATERMARK_PROCESS_V1,
         payload: { jobId: job.id, shopDomain },
       });
-      response.status(202).send({ job: toResponse(job) });
+      return { job: toResponse(job) };
     } catch (error) {
-      routeError(response, "Watermark", error, 400);
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }
   }
 
   @Post("jobs/:id/cancel")
-  async cancelJob(@Param("id") id: string, @Res() response: ShopifyResponse): Promise<void> {
+  @HttpCode(HttpStatus.OK)
+  async cancelJob(@Param("id") id: string, @ShopifySession() session: Session) {
     try {
-      const job = await this.dependencies.cancelWatermarkJob.execute(
-        id,
-        response.locals.shopify.session.shop,
-      );
-      response.status(200).send({ job: toResponse(job) });
+      const job = await this.cancelWatermarkJob.execute(id, session.shop);
+      return { job: toResponse(job) };
     } catch (error) {
-      routeError(response, "Watermark", error, 400);
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }
   }
 
   @Post("jobs/:id/process")
-  async processJob(@Param("id") id: string, @Res() response: ShopifyResponse): Promise<void> {
+  @HttpCode(HttpStatus.OK)
+  async processJob(@Param("id") id: string, @ShopifySession() session: Session) {
     try {
-      const job = await this.dependencies.processWatermarkJob.execute(
-        id,
-        response.locals.shopify.session.shop,
-      );
-      response.status(200).send({ job: toResponse(job) });
+      const job = await this.processWatermarkJob.execute(id, session.shop);
+      return { job: toResponse(job) };
     } catch (error) {
-      routeError(response, "Watermark", error);
+      throw toHttpException("Watermark", error);
     }
   }
-}
-
-function parseConfiguration(body: Record<string, unknown>) {
-  const position = String(body.position ?? "BOTTOM_RIGHT") as WatermarkPosition;
-  if (!positions.has(position)) throw new Error("Vị trí watermark không hợp lệ");
-  const layout = String(body.layout ?? "SINGLE") as WatermarkLayout;
-  if (!layouts.has(layout)) throw new Error("Kiểu bố trí watermark không hợp lệ");
-  return {
-    type: body.watermarkType === "IMAGE" ? ("IMAGE" as const) : ("TEXT" as const),
-    text: body.text !== undefined && body.text !== null ? String(body.text) : null,
-    logoUrl: body.logoUrl !== undefined && body.logoUrl !== null ? String(body.logoUrl) : null,
-    logoScale: Number(body.logoScale ?? 0.2),
-    position,
-    opacity: Number(body.opacity ?? 0.7),
-    layout,
-    rotation: Number(body.rotation ?? 0),
-    offsetX: Number(body.offsetX ?? 0),
-    offsetY: Number(body.offsetY ?? 0),
-    fontFamily: String(body.fontFamily ?? "Arial") as WatermarkFontFamily,
-    fontSize: Number(body.fontSize ?? 0.045),
-    textColor: String(body.textColor ?? "#FFFFFF"),
-    strokeColor: String(body.strokeColor ?? "#000000"),
-    strokeWidth: Number(body.strokeWidth ?? 2),
-  };
 }
 
 function toResponse(job: WatermarkJob) {

@@ -47,10 +47,11 @@ các job cũ.
 3. `infrastructure/BullMqJobQueue.ts`: adapter đưa job vào Redis.
 4. `infrastructure/BullMqWorker.ts`: nhận job và gọi handler theo `job.name`.
 5. `infrastructure/RedisConnection.ts`: đọc cấu hình Redis từ environment.
-6. `web/index.ts`: composition root nối adapter với `ProcessWatermarkJob`.
+6. `JobsModule.ts`: khai báo provider Nest, start/stop worker qua lifecycle hook.
+7. `watermark/infrastructure/WatermarkJobHandlers.ts`: đăng ký handler `WATERMARK_PROCESS_V1`.
 
 `DatabaseJobQueue`, `RunPendingJobs` và `WatermarkWorker` được giữ lại để không
-phá code cũ, nhưng runtime trong `web/index.ts` không còn dùng chúng.
+phá code cũ, nhưng runtime (`JobsModule`) không còn dùng chúng.
 
 ## Retry hoạt động thế nào?
 
