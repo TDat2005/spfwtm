@@ -28,7 +28,7 @@ export function createPrismaClient(): PrismaClient {
         user: requireEnvironment("DATABASE_USER"),
         password: requireEnvironment("DATABASE_PASSWORD"),
         database: requireEnvironment("DATABASE_NAME"),
-        connectionLimit: 5,
+        connectionLimit: Number(process.env.DATABASE_POOL_LIMIT || 15),
         allowPublicKeyRetrieval: process.env.NODE_ENV !== "production",
     });
 

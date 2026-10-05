@@ -44,27 +44,6 @@ export class MediaChangeClassifier {
       return { kind: "SOURCE_UNCHANGED", primaryMedia: primary };
     }
 
-    const sourceStillExists = input.product.media.some(
-      (media) => media.id === input.sourceMediaId
-    );
-    if (
-      sourceStillExists &&
-      !wasCreatedForThisUpdate(primary.createdAt, input.webhookTriggeredAt)
-    ) {
-      return { kind: "MEDIA_REORDERED", primaryMedia: primary };
-    }
-
     return { kind: "MERCHANT_PRIMARY_CHANGED", primaryMedia: primary };
   }
-}
-
-function wasCreatedForThisUpdate(
-  mediaCreatedAt: Date | null,
-  webhookTriggeredAt: Date
-): boolean {
-  if (!mediaCreatedAt) return false;
-  return (
-    Math.abs(webhookTriggeredAt.getTime() - mediaCreatedAt.getTime()) <=
-    NEW_MEDIA_WINDOW_MS
-  );
 }

@@ -30,6 +30,7 @@ interface WatermarkPreviewProps {
   imageUrl: string | null;
   productTitle?: string;
   style: WatermarkStyle;
+  showWatermark?: boolean;
 }
 
 type LoadedImage =
@@ -40,6 +41,7 @@ export function WatermarkPreview({
   imageUrl,
   productTitle,
   style,
+  showWatermark = true,
 }: WatermarkPreviewProps) {
   const image = useImageSize(imageUrl);
   const debouncedLogoUrl = useDebounced(style.logoUrl.trim(), 400);
@@ -49,37 +51,92 @@ export function WatermarkPreview({
 
   if (!imageUrl) {
     return (
-      <Text as="p" variant="bodyMd" color="subdued">
-        Chọn một sản phẩm có ảnh để xem trước watermark.
-      </Text>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "420px",
+          height: "360px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "var(--p-surface-neutral-subdued, #f6f6f7)",
+          border: "1px dashed var(--p-border-subdued, #e1e3e5)",
+          borderRadius: "8px",
+          padding: "16px",
+          boxSizing: "border-box",
+        }}
+      >
+        <Text as="p" variant="bodyMd" color="subdued">
+          Chọn một sản phẩm có ảnh để xem trước watermark.
+        </Text>
+      </div>
     );
   }
+
   if (image.status === "error") {
     return (
-      <Banner status="warning" title="Không tải được ảnh sản phẩm để xem trước" />
+      <div style={{ maxWidth: "420px" }}>
+        <Banner status="warning" title="Không tải được ảnh sản phẩm để xem trước" />
+      </div>
     );
   }
+
   if (image.status !== "loaded") {
-    return <Spinner accessibilityLabel="Đang tải ảnh xem trước" size="small" />;
+    return (
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "420px",
+          height: "360px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "var(--p-surface-neutral-subdued, #f6f6f7)",
+          border: "1px solid var(--p-border-subdued, #e1e3e5)",
+          borderRadius: "8px",
+          boxSizing: "border-box",
+        }}
+      >
+        <Spinner accessibilityLabel="Đang tải ảnh xem trước" size="large" />
+      </div>
+    );
   }
 
   const { width, height } = image.size;
-  const overlay = buildOverlay(style, width, logo, debouncedLogoUrl);
+  const overlay = showWatermark
+    ? buildOverlay(style, width, logo, debouncedLogoUrl)
+    : null;
 
   return (
     <Stack vertical spacing="tight">
       <div
         style={{
+          width: "100%",
           maxWidth: "420px",
+          height: "360px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "var(--p-surface-neutral-subdued, #f6f6f7)",
           border: "1px solid var(--p-border-subdued, #e1e3e5)",
           borderRadius: "8px",
           overflow: "hidden",
-          lineHeight: 0,
+          boxSizing: "border-box",
+          padding: "12px",
         }}
       >
         <svg
           viewBox={`0 0 ${width} ${height}`}
-          width="100%"
+          style={{
+            maxWidth: "100%",
+            maxHeight: "100%",
+            width: "auto",
+            height: "auto",
+            aspectRatio: `${width} / ${height}`,
+            display: "block",
+            borderRadius: "4px",
+            boxShadow: "0 1px 3px rgba(0, 0, 0, 0.12)",
+          }}
           role="img"
           aria-label={`Xem trước watermark trên ${productTitle ?? "ảnh sản phẩm"}`}
         >

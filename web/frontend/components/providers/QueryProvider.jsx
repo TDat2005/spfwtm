@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -6,10 +7,13 @@ import {
 } from "react-query";
 
 export function QueryProvider({ children }) {
-  const client = new QueryClient({
-    queryCache: new QueryCache(),
-    mutationCache: new MutationCache(),
-  });
+  const [client] = useState(
+    () =>
+      new QueryClient({
+        queryCache: new QueryCache(),
+        mutationCache: new MutationCache(),
+      })
+  );
 
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }

@@ -28,6 +28,7 @@ import { EnqueueJob } from "../modules/jobs/application/EnqueueJob.ts";
 import { ProductsController } from "./products/ProductsController.ts";
 import { ProductsService } from "./products/ProductsService.ts";
 import { SpaModule } from "./SpaModule.ts";
+import { PRISMA_CLIENT, SHOPIFY } from "../shared/nest/tokens.ts";
 
 describe("Nest API routes", () => {
   it("passes the Shopify session and JSON body to controllers", async () => {
@@ -76,6 +77,8 @@ describe("Nest API routes", () => {
         { provide: CancelWatermarkBatch, useValue: unused },
         { provide: EnqueueJob, useValue: unused },
         { provide: ProductsService, useValue: { count: async () => 7 } },
+        { provide: PRISMA_CLIENT, useValue: unused },
+        { provide: SHOPIFY, useValue: unused },
       ],
     })
     class ApiTestModule {}

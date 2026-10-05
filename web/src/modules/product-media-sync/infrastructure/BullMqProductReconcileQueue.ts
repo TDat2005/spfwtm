@@ -8,16 +8,20 @@ export class BullMqProductReconcileQueue implements ProductReconcileQueue {
   async enqueue(input: {
     webhookId: string;
     shopDomain: string;
+    productId: string;
     delayMs: number;
   }): Promise<void> {
+    const cleanProductId = input.productId.replace(/[^a-zA-Z0-9_-]/g, "_");
     await this.enqueueJob.execute({
       ...PRODUCT_MEDIA_RECONCILE_V1,
+      jobId: `reconcile_${input.shopDomain}_${cleanProductId}`,
       payload: {
         webhookId: input.webhookId,
         shopDomain: input.shopDomain,
       },
       delayMs: input.delayMs,
       maxAttempts: 5,
+      removeOnComplete: true,
     });
   }
 }

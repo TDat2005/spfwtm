@@ -14,6 +14,7 @@ export interface BackgroundJobProps {
   status?: BackgroundJobStatus;
   attempts?: number;
   maxAttempts?: number;
+  removeOnComplete?: boolean;
   lastError?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
@@ -27,6 +28,7 @@ export class BackgroundJob {
   readonly processorVersion: number;
   readonly delayMs: number;
   readonly maxAttempts: number;
+  readonly removeOnComplete?: boolean;
   readonly createdAt: Date;
   private currentStatus: BackgroundJobStatus;
   private currentAttempts: number;
@@ -52,6 +54,7 @@ export class BackgroundJob {
     this.currentStatus = props.status ?? "PENDING";
     this.currentAttempts = props.attempts ?? 0;
     this.maxAttempts = props.maxAttempts ?? 3;
+    this.removeOnComplete = props.removeOnComplete;
     this.currentLastError = props.lastError ?? null;
     this.createdAt = props.createdAt ?? new Date();
     this.currentUpdatedAt = props.updatedAt ?? new Date();

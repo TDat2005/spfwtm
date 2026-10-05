@@ -12,6 +12,7 @@ export interface RemoteImageDownloader {
 export interface MediaStorage {
   save(storageKey: string, bytes: Buffer): Promise<void>;
   read(storageKey: string): Promise<Buffer>;
+  delete(storageKey: string): Promise<boolean>;
 }
 
 export interface ContentHasher {

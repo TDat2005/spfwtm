@@ -24,12 +24,25 @@ export class PrismaProductRepository implements ProductRepository {
         update: {},
       });
 
+      const publishedRows = await transaction.publishedMedia.findMany({
+        where: { shopId: shop.id },
+        select: { shopifyMediaId: true },
+      });
+      const publishedMediaIds = new Set(
+        publishedRows.map((row) => row.shopifyMediaId)
+      );
+
       const existingRows = await transaction.catalogProduct.findMany({
         where: {
           shopId: shop.id,
           shopifyProductId: { in: products.map((product) => product.id) },
         },
-        select: { shopifyProductId: true, sourceMediaId: true },
+        select: {
+          shopifyProductId: true,
+          sourceMediaId: true,
+          originalImageUrl: true,
+          imageUrl: true,
+        },
       });
       const existingById = new Map(
         existingRows.map((row) => [row.shopifyProductId, row])
@@ -53,27 +66,71 @@ export class PrismaProductRepository implements ProductRepository {
               status: product.status,
               productType: product.productType,
               imageUrl: product.imageUrl,
+              originalImageUrl: product.imageUrl,
               imageAltText: product.imageAltText,
               sourceMediaId: product.mediaId,
+              needsReview: false,
+              sourceVersion: 1,
             },
           });
         } else {
-          await transaction.catalogProduct.update({
-            where,
-            data: {
-              title: product.title,
-              status: product.status,
-              productType: product.productType,
-              deletedAt: null,
-              ...(existing.sourceMediaId
-                ? {}
-                : {
-                    imageUrl: product.imageUrl,
-                    imageAltText: product.imageAltText,
-                    sourceMediaId: product.mediaId,
-                  }),
-            },
-          });
+          const isAppPublishedMedia =
+            product.mediaId !== null && publishedMediaIds.has(product.mediaId);
+
+          if (isAppPublishedMedia) {
+            // Shopify's primary media is the app's published watermarked image.
+            // Do NOT overwrite originalImageUrl or sourceMediaId!
+            await transaction.catalogProduct.update({
+              where,
+              data: {
+                title: product.title,
+                status: product.status,
+                productType: product.productType,
+                deletedAt: null,
+                imageUrl: product.imageUrl,
+                imageAltText: product.imageAltText,
+              },
+            });
+          } else if (
+            product.mediaId &&
+            existing.sourceMediaId &&
+            product.mediaId !== existing.sourceMediaId
+          ) {
+            // Merchant changed the primary image on Shopify!
+            // Update originalImageUrl and mark needsReview = true!
+            await transaction.catalogProduct.update({
+              where,
+              data: {
+                title: product.title,
+                status: product.status,
+                productType: product.productType,
+                deletedAt: null,
+                imageUrl: product.imageUrl,
+                originalImageUrl: product.imageUrl,
+                imageAltText: product.imageAltText,
+                sourceMediaId: product.mediaId,
+                needsReview: true,
+                sourceVersion: { increment: 1 },
+              },
+            });
+          } else {
+            // Media unchanged, or existing didn't have sourceMediaId yet
+            await transaction.catalogProduct.update({
+              where,
+              data: {
+                title: product.title,
+                status: product.status,
+                productType: product.productType,
+                deletedAt: null,
+                imageUrl: product.imageUrl,
+                imageAltText: product.imageAltText,
+                sourceMediaId: existing.sourceMediaId ?? product.mediaId,
+                originalImageUrl:
+                  existing.originalImageUrl ??
+                  (isAppPublishedMedia ? null : product.imageUrl),
+              },
+            });
+          }
         }
       }
     }, {
@@ -129,6 +186,7 @@ export class PrismaProductRepository implements ProductRepository {
           status: row.status,
           productType: row.productType,
           imageUrl: row.imageUrl,
+          originalImageUrl: row.originalImageUrl ?? row.imageUrl,
           imageAltText: row.imageAltText,
           mediaId: row.sourceMediaId,
           needsReview: row.needsReview,

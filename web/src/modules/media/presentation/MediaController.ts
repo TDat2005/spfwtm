@@ -3,8 +3,10 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   HttpStatus,
   Inject,
+  Optional,
   Param,
   Post,
   Res,
@@ -15,10 +17,35 @@ import type { Response } from "express";
 import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
 import { toHttpException } from "../../../shared/nest/toHttpException.ts";
 import { MediaService } from "../application/MediaService.ts";
+import { StorageCleanupService } from "../application/StorageCleanupService.ts";
 
 @Controller("api/media")
 export class MediaController {
-  constructor(@Inject(MediaService) private readonly mediaService: MediaService) {}
+  constructor(
+    @Inject(MediaService) private readonly mediaService: MediaService,
+    @Optional() @Inject(StorageCleanupService) private readonly cleanupService?: StorageCleanupService,
+  ) {}
+
+  @Post("cleanup")
+  @HttpCode(HttpStatus.OK)
+  async cleanup(
+    @Body("olderThanDays") olderThanDays: unknown,
+    @ShopifySession() session: Session,
+  ) {
+    try {
+      if (!this.cleanupService) {
+        return { success: true, deletedAssetsCount: 0, freedBytes: 0 };
+      }
+      const days = typeof olderThanDays === "number" ? olderThanDays : 7;
+      const result = await this.cleanupService.cleanupProcessedAssets({
+        shopDomain: session.shop,
+        olderThanDays: days,
+      });
+      return { success: true, ...result };
+    } catch (error) {
+      throw toHttpException("Media", error);
+    }
+  }
 
   @Get("assets/:id/content")
   async content(

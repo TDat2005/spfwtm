@@ -10,6 +10,7 @@ export interface EnqueueJobInput {
   processorVersion: number;
   delayMs?: number;
   maxAttempts?: number;
+  removeOnComplete?: boolean;
 }
 
 export class EnqueueJob {
@@ -38,6 +39,7 @@ export class EnqueueJob {
       processorVersion: input.processorVersion,
       delayMs: input.delayMs,
       maxAttempts: input.maxAttempts ?? 3,
+      removeOnComplete: input.removeOnComplete,
     });
   }
 }

@@ -40,6 +40,9 @@ model Shop {
   publishedMedia      PublishedMedia[]
   webhookInbox        WebhookInbox[]
   publicationAttempts PublicationAttempt[]
+  watermarkTemplates  WatermarkTemplate[]
+  autoWatermarkEnabled Boolean             @default(false)
+  uninstalledAt       DateTime?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 
@@ -54,6 +57,7 @@ model CatalogProduct {
   status           CatalogProductStatus
   productType      String               @default("") @db.VarChar(255)
   imageUrl         String?              @db.Text
+  originalImageUrl String?              @db.Text
   imageAltText     String?              @db.Text
 
   sourceVersion     Int       @default(1)
@@ -278,4 +282,19 @@ model PublishedMedia {
   @@index([shopId, createdAt])
   @@index([shopId, shopifyProductId])
   @@map("published_media")
+}
+
+model WatermarkTemplate {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  shopId    String   @db.VarChar(30)
+  name      String   @db.VarChar(255)
+  config    String   @db.Text
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+  @@map("watermark_templates")
 }

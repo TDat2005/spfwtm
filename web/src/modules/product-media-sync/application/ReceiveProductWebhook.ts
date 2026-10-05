@@ -26,6 +26,7 @@ export interface ProductReconcileQueue {
   enqueue(input: {
     webhookId: string;
     shopDomain: string;
+    productId: string;
     delayMs: number;
   }): Promise<void>;
 }
@@ -74,6 +75,7 @@ export class ReceiveProductWebhook {
       await this.reconcileQueue.enqueue({
         webhookId: input.webhookId,
         shopDomain: input.shopDomain,
+        productId,
         delayMs: this.debounceMs,
       });
       await this.inbox.markEnqueued(delivery.inboxId);

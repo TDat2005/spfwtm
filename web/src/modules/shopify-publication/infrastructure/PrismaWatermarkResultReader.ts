@@ -43,6 +43,7 @@ export class PrismaWatermarkResultReader
             productId: job.product.shopifyProductId,
             bytes,
             mimeType: job.resultMedia.mimeType,
+            defaultAltText: job.product.imageAltText?.trim() || job.product.title.trim() || null,
         };
     }
 }

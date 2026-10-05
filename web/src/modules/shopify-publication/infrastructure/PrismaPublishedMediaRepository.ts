@@ -121,6 +121,37 @@ export class PrismaPublishedMediaRepository
     }
 
     async delete(id: string): Promise<void> {
+        const media = await this.prisma.publishedMedia.findUnique({
+            where: { id },
+            select: { shopId: true, shopifyProductId: true },
+        });
+
+        if (media) {
+            const product = await this.prisma.catalogProduct.findUnique({
+                where: {
+                    shopId_shopifyProductId: {
+                        shopId: media.shopId,
+                        shopifyProductId: media.shopifyProductId,
+                    },
+                },
+                select: { originalImageUrl: true },
+            });
+
+            if (product?.originalImageUrl) {
+                await this.prisma.catalogProduct.update({
+                    where: {
+                        shopId_shopifyProductId: {
+                            shopId: media.shopId,
+                            shopifyProductId: media.shopifyProductId,
+                        },
+                    },
+                    data: {
+                        imageUrl: product.originalImageUrl,
+                    },
+                });
+            }
+        }
+
         await this.prisma.publishedMedia.delete({
             where: { id },
         });

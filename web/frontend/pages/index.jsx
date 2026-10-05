@@ -1,26 +1,13 @@
-import { Page, Layout } from "@shopify/polaris";
+import { Page } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import {
-  BulkWatermarkStudio,
-  ProductsCard,
-  WatermarkStudio,
-} from "../components";
+import { UnifiedWatermarkStudio } from "../components";
 
 export default function HomePage() {
   return (
-    <Page title="Watermark Studio">
+    <Page fullWidth title="Watermark Studio">
       <TitleBar title="Watermark Studio" />
-      <Layout>
-        <Layout.Section>
-          <ProductsCard />
-        </Layout.Section>
-        <Layout.Section>
-          <BulkWatermarkStudio />
-        </Layout.Section>
-        <Layout.Section>
-          <WatermarkStudio />
-        </Layout.Section>
-      </Layout>
+      <UnifiedWatermarkStudio />
     </Page>
   );
 }
+

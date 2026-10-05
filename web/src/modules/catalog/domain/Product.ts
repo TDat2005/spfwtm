@@ -6,6 +6,7 @@ interface ProductProps {
   status: ProductStatus;
   productType?: string;
   imageUrl: string | null;
+  originalImageUrl?: string | null;
   imageAltText: string | null;
   mediaId?: string | null;
   needsReview?: boolean;
@@ -18,6 +19,7 @@ export class Product {
   readonly status: ProductStatus;
   readonly productType: string;
   readonly imageUrl: string | null;
+  readonly originalImageUrl: string | null;
   readonly imageAltText: string | null;
   readonly mediaId: string | null;
   readonly needsReview: boolean;
@@ -29,6 +31,7 @@ export class Product {
     status,
     productType,
     imageUrl,
+    originalImageUrl,
     imageAltText,
     mediaId,
     needsReview,
@@ -47,6 +50,7 @@ export class Product {
     this.status = status;
     this.productType = productType?.trim() ?? "";
     this.imageUrl = imageUrl;
+    this.originalImageUrl = originalImageUrl ?? imageUrl;
     this.imageAltText = imageAltText;
     this.mediaId = mediaId ?? null;
     this.needsReview = needsReview ?? false;

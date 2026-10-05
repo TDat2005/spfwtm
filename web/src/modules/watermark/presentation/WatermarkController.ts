@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Param, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Inject, Param, Post } from "@nestjs/common";
 import type { Session } from "@shopify/shopify-api";
 import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
 import { toHttpException } from "../../../shared/nest/toHttpException.ts";
@@ -15,6 +15,8 @@ import { ProcessWatermarkJob } from "../application/ProcessWatermarkJob.ts";
 import { RetryWatermarkJob } from "../application/RetryWatermarkJob.ts";
 import type { WatermarkBatchSelection } from "../application/BulkWatermarkPorts.ts";
 import type { WatermarkJob } from "../domain/WatermarkJob.ts";
+import type { PrismaClient } from "../../../generated/prisma/client.ts";
+import { PRISMA_CLIENT } from "../../../shared/nest/tokens.ts";
 import {
   BatchSelectionPipe,
   WatermarkConfigurationPipe,
@@ -34,6 +36,7 @@ export class WatermarkController {
     @Inject(ListWatermarkBatches) private readonly listWatermarkBatches: ListWatermarkBatches,
     @Inject(CancelWatermarkBatch) private readonly cancelWatermarkBatch: CancelWatermarkBatch,
     @Inject(EnqueueJob) private readonly enqueueJob: EnqueueJob,
+    @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
   ) {}
 
   @Get("jobs")
@@ -174,6 +177,201 @@ export class WatermarkController {
       return { job: toResponse(job) };
     } catch (error) {
       throw toHttpException("Watermark", error);
+    }
+  }
+
+  @Get("templates")
+  async listTemplates(@ShopifySession() session: Session) {
+    try {
+      const shop = await this.prisma.shop.findUnique({
+        where: { domain: session.shop },
+      });
+      if (!shop) return { templates: [] };
+
+      const templates = await this.prisma.watermarkTemplate.findMany({
+        where: { shopId: shop.id },
+        orderBy: { createdAt: "desc" },
+      });
+
+      return {
+        templates: templates.map((t) => ({
+          id: t.id,
+          name: t.name,
+          config: JSON.parse(t.config),
+          isDefault: t.isDefault,
+          createdAt: t.createdAt,
+        })),
+      };
+    } catch (error) {
+      throw toHttpException("Watermark", error);
+    }
+  }
+
+  @Post("templates")
+  async createTemplate(
+    @Body("name") name: unknown,
+    @Body("config") config: unknown,
+    @Body("isDefault") isDefault: unknown,
+    @ShopifySession() session: Session,
+  ) {
+    try {
+      const shop = await this.prisma.shop.findUnique({
+        where: { domain: session.shop },
+      });
+      if (!shop) throw new Error("Shop không tồn tại");
+
+      const templateName = String(name || "Mẫu watermark").trim();
+      const configStr = typeof config === "string" ? config : JSON.stringify(config);
+      const makeDefault = Boolean(isDefault);
+
+      if (makeDefault) {
+        await this.prisma.watermarkTemplate.updateMany({
+          where: { shopId: shop.id },
+          data: { isDefault: false },
+        });
+      }
+
+      const template = await this.prisma.watermarkTemplate.create({
+        data: {
+          shopId: shop.id,
+          name: templateName,
+          config: configStr,
+          isDefault: makeDefault,
+        },
+      });
+
+      return {
+        template: {
+          id: template.id,
+          name: template.name,
+          config: JSON.parse(template.config),
+          isDefault: template.isDefault,
+          createdAt: template.createdAt,
+        },
+      };
+    } catch (error) {
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  @Delete("templates/:id")
+  @HttpCode(HttpStatus.OK)
+  async deleteTemplate(
+    @Param("id") id: string,
+    @ShopifySession() session: Session,
+  ) {
+    try {
+      const shop = await this.prisma.shop.findUnique({
+        where: { domain: session.shop },
+      });
+      if (!shop) throw new Error("Shop không tồn tại");
+
+      await this.prisma.watermarkTemplate.deleteMany({
+        where: { id, shopId: shop.id },
+      });
+
+      return { success: true };
+    } catch (error) {
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  @Post("templates/:id/set-default")
+  @HttpCode(HttpStatus.OK)
+  async setDefaultTemplate(
+    @Param("id") id: string,
+    @ShopifySession() session: Session,
+  ) {
+    try {
+      const shop = await this.prisma.shop.findUnique({
+        where: { domain: session.shop },
+      });
+      if (!shop) throw new Error("Shop không tồn tại");
+
+      await this.prisma.$transaction([
+        this.prisma.watermarkTemplate.updateMany({
+          where: { shopId: shop.id },
+          data: { isDefault: false },
+        }),
+        this.prisma.watermarkTemplate.updateMany({
+          where: { id, shopId: shop.id },
+          data: { isDefault: true },
+        }),
+      ]);
+
+      return { success: true };
+    } catch (error) {
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  @Get("auto-rule")
+  async getAutoRule(@ShopifySession() session: Session) {
+    try {
+      const shop = await this.prisma.shop.findUnique({
+        where: { domain: session.shop },
+        include: {
+          watermarkTemplates: {
+            where: { isDefault: true },
+            take: 1,
+          },
+        },
+      });
+      if (!shop) return { enabled: false, defaultTemplate: null };
+
+      const defaultTemplate = shop.watermarkTemplates[0] ?? null;
+
+      return {
+        enabled: shop.autoWatermarkEnabled,
+        defaultTemplate: defaultTemplate
+          ? {
+              id: defaultTemplate.id,
+              name: defaultTemplate.name,
+              config: JSON.parse(defaultTemplate.config),
+            }
+          : null,
+      };
+    } catch (error) {
+      throw toHttpException("Watermark", error);
+    }
+  }
+
+  @Post("auto-rule")
+  @HttpCode(HttpStatus.OK)
+  async updateAutoRule(
+    @Body("enabled") enabled: unknown,
+    @Body("templateId") templateId: unknown,
+    @ShopifySession() session: Session,
+  ) {
+    try {
+      const shop = await this.prisma.shop.findUnique({
+        where: { domain: session.shop },
+      });
+      if (!shop) throw new Error("Shop không tồn tại");
+
+      const isEnabled = Boolean(enabled);
+
+      if (typeof templateId === "string" && templateId.trim()) {
+        await this.prisma.$transaction([
+          this.prisma.watermarkTemplate.updateMany({
+            where: { shopId: shop.id },
+            data: { isDefault: false },
+          }),
+          this.prisma.watermarkTemplate.updateMany({
+            where: { id: templateId, shopId: shop.id },
+            data: { isDefault: true },
+          }),
+        ]);
+      }
+
+      await this.prisma.shop.update({
+        where: { id: shop.id },
+        data: { autoWatermarkEnabled: isEnabled },
+      });
+
+      return { success: true, enabled: isEnabled };
+    } catch (error) {
+      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }
   }
 }

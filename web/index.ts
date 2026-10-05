@@ -7,6 +7,7 @@ import serveStatic from "serve-static";
 import { AppModule } from "./src/app/AppModule.ts";
 import { ReceiveProductWebhook } from "./src/modules/product-media-sync/application/ReceiveProductWebhook.ts";
 import { createProductWebhookHandlers } from "./src/modules/product-media-sync/infrastructure/ProductWebhookHandlers.ts";
+import { PRISMA_CLIENT } from "./src/shared/nest/tokens.ts";
 import shopify, { SHOPIFY_API_VERSION } from "./shopify.js";
 import PrivacyWebhookHandlers from "./privacy.js";
 
@@ -35,7 +36,12 @@ async function bootstrap(): Promise<void> {
     shopify.processWebhooks({
       webhookHandlers: {
         ...PrivacyWebhookHandlers,
-        ...createProductWebhookHandlers(app.get(ReceiveProductWebhook), SHOPIFY_API_VERSION),
+        ...createProductWebhookHandlers(
+          app.get(ReceiveProductWebhook),
+          SHOPIFY_API_VERSION,
+          app.get(PRISMA_CLIENT),
+          shopify.config.sessionStorage,
+        ),
       },
     }),
   );

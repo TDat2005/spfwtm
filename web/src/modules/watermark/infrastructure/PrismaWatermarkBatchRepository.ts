@@ -169,13 +169,13 @@ async function selectByIds(
       shopifyProductId: { in: productIds },
       deletedAt: null,
     },
-    select: { id: true, shopifyProductId: true, imageUrl: true },
+    select: { id: true, shopifyProductId: true, imageUrl: true, originalImageUrl: true },
   });
   const byProductId = new Map(
     products.map((product) => [product.shopifyProductId, product])
   );
   const unavailable = productIds.filter(
-    (id) => !byProductId.get(id)?.imageUrl
+    (id) => !(byProductId.get(id)?.originalImageUrl || byProductId.get(id)?.imageUrl)
   );
   if (unavailable.length > 0) {
     throw new Error(
@@ -186,7 +186,10 @@ async function selectByIds(
   return {
     targets: productIds.map((id) => {
       const product = byProductId.get(id)!;
-      return { ...product, imageUrl: product.imageUrl! };
+      return {
+        ...product,
+        imageUrl: product.originalImageUrl ?? product.imageUrl!,
+      };
     }),
     skippedProducts: 0,
   };
@@ -201,7 +204,7 @@ async function selectByType(
   const [targets, totalProducts] = await Promise.all([
     transaction.catalogProduct.findMany({
       where: { ...where, imageUrl: { not: null } },
-      select: { id: true, shopifyProductId: true, imageUrl: true },
+      select: { id: true, shopifyProductId: true, imageUrl: true, originalImageUrl: true },
       orderBy: { shopifyProductId: "asc" },
     }),
     transaction.catalogProduct.count({ where }),
@@ -216,7 +219,10 @@ async function selectByType(
   }
 
   return {
-    targets: targets.map((product) => ({ ...product, imageUrl: product.imageUrl! })),
+    targets: targets.map((product) => ({
+      ...product,
+      imageUrl: product.originalImageUrl ?? product.imageUrl!,
+    })),
     skippedProducts: totalProducts - targets.length,
   };
 }

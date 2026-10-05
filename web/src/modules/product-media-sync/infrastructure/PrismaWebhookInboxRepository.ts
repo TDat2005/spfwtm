@@ -111,7 +111,7 @@ export class PrismaWebhookInboxRepository
     shopDomain: string,
     productId: string
   ): Promise<ProductMediaTrackingState> {
-    const activeSince = new Date(Date.now() - 15 * 60 * 1000);
+    const activeSince = new Date(Date.now() - 2 * 60 * 1000);
     const [product, published, publishing] = await Promise.all([
       this.prisma.catalogProduct.findFirst({
         where: {
@@ -173,7 +173,7 @@ export class PrismaWebhookInboxRepository
             shopifyProductId: input.inbox.productId,
           },
         },
-        select: { id: true },
+        select: { id: true, deletedAt: true },
       });
 
       if (input.change.kind === "PRODUCT_DELETED") {
@@ -185,6 +185,24 @@ export class PrismaWebhookInboxRepository
           await cancelPendingWatermarks(transaction, catalogProduct.id);
         }
       } else if (input.product) {
+        // Guard against out-of-order webhook:
+        // If product was already deleted and this webhook was triggered before deletion, ignore it!
+        if (catalogProduct?.deletedAt && input.inbox.triggeredAt < catalogProduct.deletedAt) {
+          await transaction.webhookInbox.updateMany({
+            where: {
+              shopId: shop.id,
+              productId: input.inbox.productId,
+              status: { in: ["RECEIVED", "ENQUEUED", "PROCESSING"] },
+            },
+            data: {
+              status: "IGNORED",
+              processedAt: new Date(),
+              errorMessage: null,
+            },
+          });
+          return;
+        }
+
         const product = await ensureCatalogProduct(
           transaction,
           shop.id,
@@ -205,6 +223,57 @@ export class PrismaWebhookInboxRepository
             where: { id: product.id },
             data: sourceUpdate(input.change, false),
           });
+
+          // Check if auto-watermark is enabled and has a default template
+          const shopConfig = await transaction.shop.findUnique({
+            where: { id: shop.id },
+            select: {
+              autoWatermarkEnabled: true,
+              watermarkTemplates: {
+                where: { isDefault: true },
+                take: 1,
+              },
+            },
+          });
+
+          const primaryImageUrl = input.change.primaryMedia?.imageUrl;
+          const defaultTemplate = shopConfig?.watermarkTemplates[0];
+
+          if (
+            shopConfig?.autoWatermarkEnabled &&
+            defaultTemplate &&
+            primaryImageUrl
+          ) {
+            try {
+              const cfg = JSON.parse(defaultTemplate.config);
+              await transaction.watermarkJob.create({
+                data: {
+                  id: randomUUID(),
+                  shopId: shop.id,
+                  catalogProductId: product.id,
+                  sourceImageUrl: primaryImageUrl,
+                  watermarkType: cfg.watermarkType === "IMAGE" ? "IMAGE" : "TEXT",
+                  text: cfg.watermarkType === "IMAGE" ? null : (cfg.text ?? "© My Store"),
+                  logoUrl: cfg.watermarkType === "IMAGE" ? cfg.logoUrl : null,
+                  logoScale: typeof cfg.logoScale === "number" ? cfg.logoScale : 0.2,
+                  position: cfg.position ?? "BOTTOM_RIGHT",
+                  opacity: typeof cfg.opacity === "number" ? cfg.opacity : 0.7,
+                  layout: cfg.layout ?? "SINGLE",
+                  rotation: typeof cfg.rotation === "number" ? cfg.rotation : 0,
+                  offsetX: typeof cfg.offsetX === "number" ? cfg.offsetX : 0,
+                  offsetY: typeof cfg.offsetY === "number" ? cfg.offsetY : 0,
+                  fontFamily: cfg.fontFamily ?? "Arial",
+                  fontSize: typeof cfg.fontSize === "number" ? cfg.fontSize : 0.045,
+                  textColor: cfg.textColor ?? "#FFFFFF",
+                  strokeColor: cfg.strokeColor ?? "#000000",
+                  strokeWidth: typeof cfg.strokeWidth === "number" ? cfg.strokeWidth : 2,
+                  status: "PENDING",
+                },
+              });
+            } catch {
+              // Ignore template parsing or creation errors to prevent aborting reconcile
+            }
+          }
         } else if (input.change.kind === "MERCHANT_PRIMARY_CHANGED") {
           await transaction.catalogProduct.update({
             where: { id: product.id },
@@ -218,6 +287,7 @@ export class PrismaWebhookInboxRepository
             where: { id: product.id },
             data: {
               imageUrl: null,
+              originalImageUrl: null,
               imageAltText: null,
               sourceMediaId: null,
               sourceContentHash: null,
@@ -237,8 +307,12 @@ export class PrismaWebhookInboxRepository
         }
       }
 
-      await transaction.webhookInbox.update({
-        where: { id: input.inbox.id },
+      await transaction.webhookInbox.updateMany({
+        where: {
+          shopId: shop.id,
+          productId: input.inbox.productId,
+          status: { in: ["RECEIVED", "ENQUEUED", "PROCESSING"] },
+        },
         data: {
           status: isIgnored(input.change) ? "IGNORED" : "PROCESSED",
           processedAt: new Date(),
@@ -293,6 +367,7 @@ function sourceUpdate(change: ProductMediaChange, needsReview: boolean) {
   if (!primary) throw new Error("Thay đổi ảnh nguồn phải có primary media");
   return {
     imageUrl: primary.imageUrl,
+    originalImageUrl: primary.imageUrl,
     imageAltText: primary.altText,
     sourceMediaId: primary.id,
     sourceContentHash: null,
@@ -327,6 +402,7 @@ async function ensureCatalogProduct(
       status: product.status,
       productType: product.productType,
       imageUrl: null,
+      originalImageUrl: null,
       imageAltText: null,
     },
     update: {},

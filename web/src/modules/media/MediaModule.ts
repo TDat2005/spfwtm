@@ -10,6 +10,8 @@ import { PrismaMediaAssetRepository } from "./infrastructure/PrismaMediaAssetRep
 import { Sha256ContentHasher } from "./infrastructure/Sha256ContentHasher.ts";
 import { MediaController } from "./presentation/MediaController.ts";
 
+import { StorageCleanupService } from "./application/StorageCleanupService.ts";
+
 export const MEDIA_STORAGE = Symbol("MEDIA_STORAGE");
 
 @Module({
@@ -30,7 +32,13 @@ export const MEDIA_STORAGE = Symbol("MEDIA_STORAGE");
           new PrismaMediaAssetRepository(prisma),
         ),
     },
+    {
+      provide: StorageCleanupService,
+      inject: [PRISMA_CLIENT, MEDIA_STORAGE],
+      useFactory: (prisma: PrismaClient, storage: MediaStorage) =>
+        new StorageCleanupService(prisma, storage),
+    },
   ],
-  exports: [MediaService, MEDIA_STORAGE],
+  exports: [MediaService, StorageCleanupService, MEDIA_STORAGE],
 })
 export class MediaModule {}

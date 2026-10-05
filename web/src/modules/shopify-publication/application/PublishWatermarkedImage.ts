@@ -8,7 +8,7 @@ import type { PublicationAttemptRepository } from "../../product-media-sync/appl
 export interface PublishWatermarkedImageInput {
     watermarkJobId: string;
     shopDomain: string;
-    altText: string;
+    altText?: string;
 }
 export class PublishWatermarkedImage {
     constructor(
@@ -51,7 +51,7 @@ export class PublishWatermarkedImage {
                 bytes: watermarkResult.bytes,
                 mimeType: watermarkResult.mimeType,
                 filename: `${watermarkResult.productId}.webp`,
-                altText: input.altText.trim() || "Product image with watermark",
+                altText: input.altText?.trim() || watermarkResult.defaultAltText || "Product image with watermark",
             });
 
             await this.publicationAttempts.recordMedia(

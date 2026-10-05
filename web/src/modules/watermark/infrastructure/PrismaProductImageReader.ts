@@ -14,8 +14,8 @@ export class PrismaProductImageReader implements ProductImageReader {
         deletedAt: null,
         shop: { domain: shopDomain },
       },
-      select: { imageUrl: true },
+      select: { originalImageUrl: true, imageUrl: true },
     });
-    return product?.imageUrl ?? null;
+    return product?.originalImageUrl ?? product?.imageUrl ?? null;
   }
 }

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import type { MediaStorage } from "../application/MediaPorts.ts";
 
@@ -17,6 +17,19 @@ export class LocalMediaStorage implements MediaStorage {
 
   async read(storageKey: string): Promise<Buffer> {
     return readFile(this.resolveKey(storageKey));
+  }
+
+  async delete(storageKey: string): Promise<boolean> {
+    try {
+      const path = this.resolveKey(storageKey);
+      await unlink(path);
+      return true;
+    } catch (error: unknown) {
+      if (typeof error === "object" && error !== null && "code" in error && (error as { code: string }).code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
   }
 
   private resolveKey(storageKey: string): string {

@@ -77,10 +77,12 @@ function toBullMqEntry(job: BackgroundJob) {
         type: "exponential" as const,
         delay: 1_000,
       },
-      removeOnComplete: {
-        age: 60 * 60,
-        count: 1_000,
-      },
+      removeOnComplete: job.removeOnComplete
+        ? true
+        : {
+            age: 60 * 60,
+            count: 1_000,
+          },
       removeOnFail: {
         age: 7 * 24 * 60 * 60,
         count: 5_000,

@@ -17,6 +17,7 @@ import {
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "react-query";
+import { WatermarkPreview } from "./WatermarkPreview";
 
 interface ProductDto {
   id: string;
@@ -134,7 +135,6 @@ export function WatermarkStudio() {
   const [textColor, setTextColor] = useState("#FFFFFF");
   const [strokeColor, setStrokeColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(2);
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
   const catalog = useQuery<CatalogResponse, Error>(
@@ -173,23 +173,12 @@ export function WatermarkStudio() {
   }, [productId, products]);
 
   useEffect(() => {
-    if (!activeJobId) {
-      if (!previewPath) {
-        const firstCompleted = jobs.data?.jobs.find(
-          (j) => j.status === "COMPLETED" && j.resultUrl
-        );
-        if (firstCompleted?.resultUrl) {
-          setPreviewPath(firstCompleted.resultUrl);
-        }
-      }
-      return;
-    }
+    if (!activeJobId) return;
 
     const targetJob = jobs.data?.jobs.find((j) => j.id === activeJobId);
     if (!targetJob) return;
 
     if (targetJob.status === "COMPLETED" && targetJob.resultUrl) {
-      setPreviewPath(targetJob.resultUrl);
       shopify.toast.show("Đã xử lý xong ảnh watermark");
       setActiveJobId(null);
     } else if (targetJob.status === "FAILED") {
@@ -203,7 +192,7 @@ export function WatermarkStudio() {
     } else if (targetJob.status === "CANCELLED") {
       setActiveJobId(null);
     }
-  }, [jobs.data, activeJobId, previewPath]);
+  }, [jobs.data, activeJobId]);
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -274,9 +263,6 @@ export function WatermarkStudio() {
     {
       onSuccess: (job) => {
         setActiveJobId(job.id);
-        if (job.resultUrl) {
-          setPreviewPath(job.resultUrl);
-        }
         shopify.toast.show("Đã tạo yêu cầu, đang xử lý watermark ngầm...");
       },
       onError: (error) => {
@@ -422,7 +408,7 @@ export function WatermarkStudio() {
     </Badge>,
     job.resultUrl ? (
       <Stack key={`${job.id}-actions`} vertical spacing="extraTight">
-        <Button plain onClick={() => setPreviewPath(job.resultUrl)}>
+        <Button plain url={job.resultUrl} external>
           Xem ảnh
         </Button>
         {publishedJobIds.has(job.id) ? (
@@ -721,14 +707,26 @@ export function WatermarkStudio() {
           <Text as="h2" variant="headingMd">
             Xem trước
           </Text>
-          <PreviewImage
-            path={previewPath}
-            fallbackUrl={selectedProduct?.imageUrl ?? null}
-            alt={
-              selectedProduct?.imageAltText ??
-              selectedProduct?.title ??
-              "Watermark preview"
-            }
+          <WatermarkPreview
+            imageUrl={selectedProduct?.imageUrl ?? null}
+            productTitle={selectedProduct?.title}
+            style={{
+              watermarkType,
+              text,
+              logoUrl,
+              position,
+              opacity: opacityPercent / 100,
+              layout,
+              logoScale: logoScalePercent / 100,
+              rotation,
+              offsetX: offsetXPercent / 100,
+              offsetY: offsetYPercent / 100,
+              fontFamily,
+              fontSize: fontSizePercent / 100,
+              textColor,
+              strokeColor,
+              strokeWidth,
+            }}
           />
         </Stack>
       </Card>
@@ -775,73 +773,6 @@ export function WatermarkStudio() {
         </Stack>
       </Card>
     </Stack>
-  );
-}
-
-function PreviewImage({
-  path,
-  fallbackUrl,
-  alt,
-}: {
-  path: string | null;
-  fallbackUrl: string | null;
-  alt: string;
-}) {
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!path) {
-      setObjectUrl(null);
-      setError(null);
-      return;
-    }
-    let active = true;
-    let nextObjectUrl: string | null = null;
-    fetch(path)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.blob();
-      })
-      .then((blob) => {
-        if (!active) return;
-        nextObjectUrl = URL.createObjectURL(blob);
-        setObjectUrl(nextObjectUrl);
-        setError(null);
-      })
-      .catch((reason: unknown) => {
-        if (active)
-          setError(
-            reason instanceof Error ? reason.message : "Không tải được ảnh"
-          );
-      });
-    return () => {
-      active = false;
-      if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl);
-    };
-  }, [path]);
-
-  if (error)
-    return (
-      <Banner status="critical">
-        <p>Không tải được preview: {error}</p>
-      </Banner>
-    );
-  if (path && !objectUrl)
-    return <Spinner accessibilityLabel="Đang tải ảnh preview" />;
-  const source = objectUrl ?? fallbackUrl;
-  if (!source) return <p>Chọn một sản phẩm có ảnh để xem trước.</p>;
-
-  return (
-    <div
-      style={{ maxWidth: "640px", borderRadius: "12px", overflow: "hidden" }}
-    >
-      <img
-        src={source}
-        alt={alt}
-        style={{ display: "block", width: "100%", height: "auto" }}
-      />
-    </div>
   );
 }
 
