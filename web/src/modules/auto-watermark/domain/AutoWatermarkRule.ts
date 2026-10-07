@@ -27,6 +27,8 @@ export interface AutoWatermarkRuleProps {
   onPrimaryChanged: boolean;
   syncScope: boolean;
   autoPublish: boolean;
+  /** Sản phẩm không còn thuộc rule thì gỡ ảnh watermark rule đã đưa lên Shopify. */
+  restoreOnLeave?: boolean;
   lastAppliedAt?: Date | null;
   createdAt?: Date;
 }
@@ -55,6 +57,7 @@ export class AutoWatermarkRule {
   readonly onPrimaryChanged: boolean;
   readonly syncScope: boolean;
   readonly autoPublish: boolean;
+  readonly restoreOnLeave: boolean;
   readonly lastAppliedAt: Date | null;
   readonly createdAt: Date;
 
@@ -92,6 +95,7 @@ export class AutoWatermarkRule {
     this.onPrimaryChanged = props.onPrimaryChanged;
     this.syncScope = props.syncScope;
     this.autoPublish = props.autoPublish;
+    this.restoreOnLeave = props.restoreOnLeave ?? false;
     this.lastAppliedAt = props.lastAppliedAt ?? null;
     this.createdAt = props.createdAt ?? new Date();
   }
@@ -145,6 +149,7 @@ export class AutoWatermarkRule {
       onPrimaryChanged: this.onPrimaryChanged,
       syncScope: this.syncScope,
       autoPublish: this.autoPublish,
+      restoreOnLeave: this.restoreOnLeave,
       lastAppliedAt: this.lastAppliedAt,
       createdAt: this.createdAt,
     };

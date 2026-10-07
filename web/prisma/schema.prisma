@@ -195,6 +195,9 @@ model AutoWatermarkRule {
   /// Áp cho cả sản phẩm đang có trong phạm vi, kiểm tra lại hằng đêm.
   syncScope        Boolean            @default(false)
   autoPublish      Boolean            @default(false)
+  /// Sản phẩm không còn thuộc rule (rời phạm vi) thì gỡ ảnh watermark rule đã
+  /// đưa lên Shopify. Tắt mặc định vì thao tác xóa media trên store của merchant.
+  restoreOnLeave   Boolean            @default(false)
   lastAppliedAt    DateTime?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt

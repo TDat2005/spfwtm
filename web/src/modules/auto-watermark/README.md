@@ -40,6 +40,16 @@ tự thử lại vô hạn, merchant thử lại từ lịch sử.
 Khi áp hàng loạt (`SYNC`/`MANUAL`), sản phẩm đang có ảnh watermark merchant tự
 làm (published media của job không có `ruleId`) được giữ nguyên.
 
+## Gỡ ảnh khi rời phạm vi (`restoreOnLeave`, tắt mặc định)
+
+Khi đồng bộ (đêm hoặc bấm tay), sản phẩm còn ảnh watermark **do chính rule này**
+đưa lên Shopify nhưng không còn thuộc rule (rời collection, đổi loại sản phẩm, bị
+rule ưu tiên hơn giành) thì được gỡ ảnh đó qua job `PUBLICATION_RESTORE_V1`.
+Ảnh merchant tự làm, ảnh của rule khác và ảnh gốc không bao giờ bị đụng tới.
+Collection bị xóa thì bỏ qua bước này, vì không biết sản phẩm nào thật sự đã rời.
+Trạng thái auto của sản phẩm được xóa trước, nên sản phẩm quay lại phạm vi sẽ
+được đóng dấu lại.
+
 ## Luồng
 
 ```text

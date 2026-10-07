@@ -32,6 +32,7 @@ const product = (overrides: Partial<ProductAutoState> = {}): ProductAutoState =>
   sourceImageUrl: "https://cdn.shopify.com/a.jpg",
   lastAuto: null,
   hasManualWatermark: false,
+  publishedByRules: [],
   ...overrides,
 });
 

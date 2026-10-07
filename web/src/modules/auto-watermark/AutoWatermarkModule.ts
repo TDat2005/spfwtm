@@ -15,6 +15,7 @@ import { ManageAutoWatermarkRules } from "./application/ManageAutoWatermarkRules
 import {
   BullMqAutoWatermarkApplyQueue,
   BullMqAutoWatermarkJobQueue,
+  BullMqAutoWatermarkRestoreQueue,
   PrismaWatermarkDesignStore,
 } from "./infrastructure/AutoWatermarkAdapters.ts";
 import { AutoWatermarkJobHandlers } from "./infrastructure/AutoWatermarkJobHandlers.ts";
@@ -61,12 +62,21 @@ const AUTO_WATERMARK_JOB_QUEUE = Symbol("AUTO_WATERMARK_JOB_QUEUE");
     },
     {
       provide: ApplyAutoWatermarkRules,
-      inject: [AUTO_WATERMARK_RULES, SHOP_COLLECTIONS, AUTO_WATERMARK_JOB_QUEUE],
+      inject: [AUTO_WATERMARK_RULES, SHOP_COLLECTIONS, AUTO_WATERMARK_JOB_QUEUE, EnqueueJob],
       useFactory: (
         repository: PrismaAutoWatermarkRepository,
         collections: ShopCollectionsFactory,
         queue: BullMqAutoWatermarkJobQueue,
-      ) => new ApplyAutoWatermarkRules(repository, repository, collections, repository, queue),
+        enqueue: EnqueueJob,
+      ) =>
+        new ApplyAutoWatermarkRules(
+          repository,
+          repository,
+          collections,
+          repository,
+          queue,
+          new BullMqAutoWatermarkRestoreQueue(enqueue),
+        ),
     },
     {
       provide: ManageAutoWatermarkRules,

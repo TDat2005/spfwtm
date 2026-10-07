@@ -75,6 +75,7 @@ export class PrismaAutoWatermarkRepository
       onPrimaryChanged: rule.onPrimaryChanged,
       syncScope: rule.syncScope,
       autoPublish: rule.autoPublish,
+      restoreOnLeave: rule.restoreOnLeave,
       lastAppliedAt: rule.lastAppliedAt,
     };
     await this.prisma.autoWatermarkRule.upsert({
@@ -102,7 +103,9 @@ export class PrismaAutoWatermarkRepository
     const shops = await this.prisma.shop.findMany({
       where: {
         uninstalledAt: null,
-        autoWatermarkRules: { some: { enabled: true, syncScope: true } },
+        autoWatermarkRules: {
+          some: { enabled: true, OR: [{ syncScope: true }, { restoreOnLeave: true }] },
+        },
       },
       select: { domain: true },
     });
@@ -117,14 +120,11 @@ export class PrismaAutoWatermarkRepository
       select: { ...PRODUCT_SELECT, shopId: true },
     });
     if (!row) return null;
-    const manual = await this.prisma.publishedMedia.count({
-      where: {
-        shopId: row.shopId,
-        shopifyProductId,
-        watermarkJob: { ruleId: null },
-      },
+    const published = await this.prisma.publishedMedia.findMany({
+      where: { shopId: row.shopId, shopifyProductId },
+      select: PUBLISHED_SELECT,
     });
-    return toProductState(row, manual > 0);
+    return toProductState(row, groupPublished(published).get(shopifyProductId));
   }
 
   async listProducts(shopDomain: string): Promise<ProductAutoState[]> {
@@ -133,18 +133,18 @@ export class PrismaAutoWatermarkRepository
       select: { id: true },
     });
     if (!shop) return [];
-    const [rows, manual] = await Promise.all([
+    const [rows, published] = await Promise.all([
       this.prisma.catalogProduct.findMany({
         where: { shopId: shop.id, deletedAt: null },
         select: PRODUCT_SELECT,
       }),
       this.prisma.publishedMedia.findMany({
-        where: { shopId: shop.id, watermarkJob: { ruleId: null } },
-        select: { shopifyProductId: true },
+        where: { shopId: shop.id },
+        select: PUBLISHED_SELECT,
       }),
     ]);
-    const manualIds = new Set(manual.map((media) => media.shopifyProductId));
-    return rows.map((row) => toProductState(row, manualIds.has(row.shopifyProductId)));
+    const byProduct = groupPublished(published);
+    return rows.map((row) => toProductState(row, byProduct.get(row.shopifyProductId)));
   }
 
   // --- Jobs ---
@@ -223,6 +223,15 @@ export class PrismaAutoWatermarkRepository
     );
   }
 
+  async clearAutoState(catalogProductIds: string[], ruleId: string): Promise<void> {
+    for (const ids of chunks(catalogProductIds)) {
+      await this.prisma.catalogProduct.updateMany({
+        where: { id: { in: ids }, autoRuleId: ruleId },
+        data: { autoRuleId: null, autoDesignId: null, autoSourceVersion: null },
+      });
+    }
+  }
+
   private async requireShop(shopDomain: string): Promise<{ id: string }> {
     const shop = await this.prisma.shop.findUnique({
       where: { domain: shopDomain },
@@ -248,12 +257,45 @@ function toRule(row: RuleRow): AutoWatermarkRule {
     onPrimaryChanged: row.onPrimaryChanged,
     syncScope: row.syncScope,
     autoPublish: row.autoPublish,
+    restoreOnLeave: row.restoreOnLeave,
     lastAppliedAt: row.lastAppliedAt,
     createdAt: row.createdAt,
   });
 }
 
-function toProductState(row: ProductRow, hasManualWatermark: boolean): ProductAutoState {
+const PUBLISHED_SELECT = {
+  shopifyProductId: true,
+  watermarkJobId: true,
+  watermarkJob: { select: { ruleId: true } },
+} as const;
+
+interface PublishedRow {
+  shopifyProductId: string;
+  watermarkJobId: string;
+  watermarkJob: { ruleId: string | null };
+}
+
+interface ProductPublications {
+  hasManualWatermark: boolean;
+  publishedByRules: Array<{ ruleId: string; watermarkJobId: string }>;
+}
+
+/** Ảnh watermark đang có trên Shopify theo sản phẩm: làm tay hay do rule nào. */
+function groupPublished(rows: PublishedRow[]): Map<string, ProductPublications> {
+  const result = new Map<string, ProductPublications>();
+  for (const row of rows) {
+    const entry = result.get(row.shopifyProductId) ?? { hasManualWatermark: false, publishedByRules: [] };
+    if (row.watermarkJob.ruleId) {
+      entry.publishedByRules.push({ ruleId: row.watermarkJob.ruleId, watermarkJobId: row.watermarkJobId });
+    } else {
+      entry.hasManualWatermark = true;
+    }
+    result.set(row.shopifyProductId, entry);
+  }
+  return result;
+}
+
+function toProductState(row: ProductRow, published: ProductPublications | undefined): ProductAutoState {
   return {
     catalogProductId: row.id,
     shopifyProductId: row.shopifyProductId,
@@ -268,7 +310,8 @@ function toProductState(row: ProductRow, hasManualWatermark: boolean): ProductAu
             sourceVersion: row.autoSourceVersion,
           }
         : null,
-    hasManualWatermark,
+    hasManualWatermark: published?.hasManualWatermark ?? false,
+    publishedByRules: published?.publishedByRules ?? [],
   };
 }
 

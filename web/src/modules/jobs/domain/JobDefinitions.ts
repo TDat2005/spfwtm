@@ -77,6 +77,15 @@ export const PUBLICATION_PUBLISH_V1 = {
   priority: JOB_PRIORITY.NORMAL,
 } as const satisfies JobDefinition;
 
+/** Gỡ một ảnh watermark đã publish khỏi Shopify (rule bật restoreOnLeave). */
+export const PUBLICATION_RESTORE_V1 = {
+  jobName: "PUBLICATION_RESTORE_V1",
+  payloadVersion: 1,
+  processorVersion: 1,
+  lane: "system",
+  priority: JOB_PRIORITY.NORMAL,
+} as const satisfies JobDefinition;
+
 export const PRODUCT_MEDIA_RECONCILE_V1 = {
   jobName: "PRODUCT_MEDIA_RECONCILE_V1",
   payloadVersion: 1,

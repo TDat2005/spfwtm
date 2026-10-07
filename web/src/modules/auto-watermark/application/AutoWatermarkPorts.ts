@@ -8,7 +8,7 @@ export interface AutoWatermarkRuleRepository {
   save(rule: AutoWatermarkRule): Promise<void>;
   delete(id: string, shopDomain: string): Promise<void>;
   markApplied(ruleIds: string[], at: Date): Promise<void>;
-  /** Shop có ít nhất một rule đang bật đồng bộ phạm vi. */
+  /** Shop có ít nhất một rule đang bật cần kiểm tra phạm vi hằng đêm (đồng bộ hoặc gỡ khi rời phạm vi). */
   listShopsWithSyncRules(): Promise<string[]>;
 }
 
@@ -28,11 +28,18 @@ export interface AutoWatermarkJobWriter {
     products: ProductAutoState[];
     asBatch: boolean;
   }): Promise<{ batchId: string | null; jobIds: string[] }>;
+  /** Xóa trạng thái auto (nếu đang trỏ tới rule) để sản phẩm quay lại phạm vi thì được đóng dấu lại. */
+  clearAutoState(catalogProductIds: string[], ruleId: string): Promise<void>;
 }
 
 export interface AutoWatermarkJobQueue {
   enqueueJob(jobId: string, shopDomain: string): Promise<void>;
   dispatchBatch(batchId: string): Promise<void>;
+}
+
+/** Gỡ ảnh watermark đã publish (theo job) khỏi Shopify, chạy nền vì gọi Shopify. */
+export interface AutoWatermarkRestoreQueue {
+  requestRestore(input: { shopDomain: string; watermarkJobIds: string[] }): Promise<void>;
 }
 
 export interface AutoWatermarkApplyQueue {

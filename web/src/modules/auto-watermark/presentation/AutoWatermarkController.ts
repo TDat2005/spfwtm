@@ -125,6 +125,7 @@ function toResponse({ rule, design }: RuleWithDesign) {
     onPrimaryChanged: rule.onPrimaryChanged,
     syncScope: rule.syncScope,
     autoPublish: rule.autoPublish,
+    restoreOnLeave: rule.restoreOnLeave,
     lastAppliedAt: rule.lastAppliedAt,
     createdAt: rule.createdAt,
     design: design ? { layers: design.toJSON().layers, summary: design.summary } : null,
@@ -158,8 +159,22 @@ function parseSettings(
     if (!Number.isInteger(priority)) throw badRequest("Độ ưu tiên phải là số nguyên");
     settings.priority = priority;
   }
-  const flags = ["enabled", "onNewProduct", "onPrimaryChanged", "syncScope", "autoPublish"] as const;
-  const defaults = { enabled: true, onNewProduct: true, onPrimaryChanged: false, syncScope: false, autoPublish: false };
+  const flags = [
+    "enabled",
+    "onNewProduct",
+    "onPrimaryChanged",
+    "syncScope",
+    "autoPublish",
+    "restoreOnLeave",
+  ] as const;
+  const defaults = {
+    enabled: true,
+    onNewProduct: true,
+    onPrimaryChanged: false,
+    syncScope: false,
+    autoPublish: false,
+    restoreOnLeave: false,
+  };
   for (const flag of flags) {
     const value = body[flag];
     if (value === undefined) {

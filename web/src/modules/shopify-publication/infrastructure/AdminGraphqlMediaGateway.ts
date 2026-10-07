@@ -316,10 +316,11 @@ export class AdminGraphqlMediaGateway implements ShopifyMediaGateway {
       session: this.session,
     });
 
+    // `userErrors` của productDeleteMedia đã deprecated, lỗi thật nằm ở `mediaUserErrors`.
     const result = await client.request<{
       productDeleteMedia: {
-        deletedMediaIds: string[];
-        userErrors: Array<{
+        deletedMediaIds: string[] | null;
+        mediaUserErrors: Array<{
           field: string[] | null;
           message: string;
         }>;
@@ -335,7 +336,7 @@ export class AdminGraphqlMediaGateway implements ShopifyMediaGateway {
             mediaIds: $mediaIds
           ) {
             deletedMediaIds
-            userErrors {
+            mediaUserErrors {
               field
               message
             }
@@ -354,7 +355,13 @@ export class AdminGraphqlMediaGateway implements ShopifyMediaGateway {
       throw new Error("Shopify không trả về kết quả xóa media");
     }
 
-    throwOnUserErrors(result.data.productDeleteMedia.userErrors);
+    const { mediaUserErrors } = result.data.productDeleteMedia;
+    if (mediaUserErrors.length > 0) {
+      const details = mediaUserErrors
+        .map((error) => `${error.field?.join(".") ?? "unknown"}: ${error.message}`)
+        .join("; ");
+      throw new Error(`Shopify không xóa được ảnh của sản phẩm ${productId}: ${details}`);
+    }
   }
 }
 function throwOnUserErrors(

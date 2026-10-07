@@ -11,6 +11,8 @@ export interface ProductAutoState {
   lastAuto: { ruleId: string; designId: string; sourceVersion: number } | null;
   /** Đang có ảnh watermark merchant tự đưa lên (không do rule nào tạo). */
   hasManualWatermark: boolean;
+  /** Ảnh watermark do rule đưa lên Shopify và còn trên sản phẩm. */
+  publishedByRules: ReadonlyArray<{ ruleId: string; watermarkJobId: string }>;
 }
 
 export type AutoWatermarkSkipReason =

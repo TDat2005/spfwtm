@@ -6,6 +6,7 @@ import type {
   AutoWatermarkApplyQueue,
   AutoWatermarkJobQueue,
   AutoWatermarkJobWriter,
+  AutoWatermarkRestoreQueue,
   AutoWatermarkRuleRepository,
   ProductAutoStateReader,
   ShopCollections,
@@ -50,6 +51,7 @@ function product(id: number, overrides: Partial<ProductAutoState> = {}): Product
     sourceImageUrl: `https://cdn.shopify.com/${id}.jpg`,
     lastAuto: null,
     hasManualWatermark: false,
+    publishedByRules: [],
     ...overrides,
   };
 }
@@ -73,7 +75,9 @@ function setup(rules: AutoWatermarkRule[], products: ProductAutoState[], members
       created.push({ ruleId: r.id, productIds: ps.map((p) => p.catalogProductId), asBatch });
       return { batchId: asBatch ? `batch-${created.length}` : null, jobIds: ps.map((p) => `job-${p.catalogProductId}`) };
     }),
+    clearAutoState: vi.fn(async () => undefined),
   };
+  const restoreQueue: AutoWatermarkRestoreQueue = { requestRestore: vi.fn(async () => undefined) };
   const queue: AutoWatermarkJobQueue = {
     enqueueJob: vi.fn(async () => undefined),
     dispatchBatch: vi.fn(async () => undefined),
@@ -89,7 +93,9 @@ function setup(rules: AutoWatermarkRule[], products: ProductAutoState[], members
     search: vi.fn(async () => []),
   };
   const factory: ShopCollectionsFactory = { forShop: vi.fn(async () => collections) };
-  return { ruleRepo, reader, writer, queue, collections, factory, created };
+  const apply = () =>
+    new ApplyAutoWatermarkRules(ruleRepo, reader, factory, writer, queue, restoreQueue);
+  return { ruleRepo, reader, writer, queue, restoreQueue, collections, factory, created, apply };
 }
 
 describe("EvaluateProductRules", () => {
@@ -151,7 +157,7 @@ describe("ApplyAutoWatermarkRules", () => {
     const all = rule({ priority: 0, syncScope: true });
     const products = [1, 2, 3, 4].map((n) => product(n));
     const ctx = setup([all, newIn, sale], products, { [SALE]: [1, 2, 99], [NEW_IN]: [2, 3] });
-    const apply = new ApplyAutoWatermarkRules(ctx.ruleRepo, ctx.reader, ctx.factory, ctx.writer, ctx.queue);
+    const apply = ctx.apply();
 
     const summaries = await apply.execute({ shopDomain: SHOP, trigger: "SYNC" });
 
@@ -172,7 +178,7 @@ describe("ApplyAutoWatermarkRules", () => {
     const sale = rule({ priority: 10, scope: "COLLECTION", scopeValue: SALE, syncScope: false });
     const all = rule({ priority: 0 });
     const ctx = setup([all, sale], [product(1), product(2)], { [SALE]: [1] });
-    const apply = new ApplyAutoWatermarkRules(ctx.ruleRepo, ctx.reader, ctx.factory, ctx.writer, ctx.queue);
+    const apply = ctx.apply();
 
     await apply.execute({ shopDomain: SHOP, trigger: "MANUAL", ruleId: all.id });
 
@@ -183,7 +189,7 @@ describe("ApplyAutoWatermarkRules", () => {
     const type = rule({ priority: 10, scope: "PRODUCT_TYPE", scopeValue: "Áo", syncScope: true });
     const sale = rule({ priority: 0, scope: "COLLECTION", scopeValue: SALE });
     const ctx = setup([sale, type], [product(1)], { [SALE]: [1] });
-    const apply = new ApplyAutoWatermarkRules(ctx.ruleRepo, ctx.reader, ctx.factory, ctx.writer, ctx.queue);
+    const apply = ctx.apply();
 
     await apply.execute({ shopDomain: SHOP, trigger: "SYNC" });
 
@@ -200,7 +206,7 @@ describe("ApplyAutoWatermarkRules", () => {
       product(4),
     ];
     const ctx = setup([gone, all], products, {});
-    const apply = new ApplyAutoWatermarkRules(ctx.ruleRepo, ctx.reader, ctx.factory, ctx.writer, ctx.queue);
+    const apply = ctx.apply();
 
     const [goneSummary, allSummary] = await apply.execute({ shopDomain: SHOP, trigger: "SYNC" });
 
@@ -215,9 +221,86 @@ describe("ApplyAutoWatermarkRules", () => {
   it("từ chối áp tay rule đang tắt", async () => {
     const off = rule({ enabled: false });
     const ctx = setup([off], [product(1)], {});
-    const apply = new ApplyAutoWatermarkRules(ctx.ruleRepo, ctx.reader, ctx.factory, ctx.writer, ctx.queue);
+    const apply = ctx.apply();
 
     await expect(apply.execute({ shopDomain: SHOP, trigger: "MANUAL", ruleId: off.id })).rejects.toThrow("đang tắt");
+  });
+});
+
+describe("ApplyAutoWatermarkRules · gỡ ảnh khi rời phạm vi", () => {
+  const published = (ruleId: string, n: number) => [{ ruleId, watermarkJobId: `job-${n}` }];
+
+  it("gỡ ảnh của rule trên sản phẩm đã rời collection, giữ sản phẩm còn trong collection", async () => {
+    const sale = rule({ scope: "COLLECTION", scopeValue: SALE, syncScope: true, restoreOnLeave: true });
+    const products = [
+      product(1, { publishedByRules: published(sale.id, 1) }),
+      product(5, { publishedByRules: published(sale.id, 5) }),
+      product(6),
+    ];
+    const ctx = setup([sale], products, { [SALE]: [1] });
+
+    const [summary] = await ctx.apply().execute({ shopDomain: SHOP, trigger: "SYNC" });
+
+    expect(summary?.restoredProducts).toBe(1);
+    expect(ctx.writer.clearAutoState).toHaveBeenCalledWith(["cp-5"], sale.id);
+    expect(ctx.restoreQueue.requestRestore).toHaveBeenCalledWith({ shopDomain: SHOP, watermarkJobIds: ["job-5"] });
+  });
+
+  it("chỉ gỡ ảnh của chính rule đó, không đụng ảnh của rule khác hay ảnh làm tay", async () => {
+    const sale = rule({ priority: 10, scope: "COLLECTION", scopeValue: SALE, restoreOnLeave: true });
+    const all = rule({ priority: 0, syncScope: true });
+    const products = [
+      product(5, {
+        hasManualWatermark: true,
+        publishedByRules: [...published(sale.id, 51), ...published(all.id, 52)],
+      }),
+    ];
+    const ctx = setup([sale, all], products, { [SALE]: [] });
+
+    await ctx.apply().execute({ shopDomain: SHOP, trigger: "SYNC" });
+
+    expect(ctx.restoreQueue.requestRestore).toHaveBeenCalledTimes(1);
+    expect(ctx.restoreQueue.requestRestore).toHaveBeenCalledWith({ shopDomain: SHOP, watermarkJobIds: ["job-51"] });
+  });
+
+  it("sản phẩm bị rule ưu tiên cao hơn giành cũng tính là rời rule", async () => {
+    const vip = rule({ priority: 20, scope: "PRODUCT_TYPE", scopeValue: "Áo" });
+    const sale = rule({ priority: 10, scope: "COLLECTION", scopeValue: SALE, restoreOnLeave: true });
+    const ctx = setup([vip, sale], [product(1, { publishedByRules: published(sale.id, 1) })], { [SALE]: [1] });
+
+    const summaries = await ctx.apply().execute({ shopDomain: SHOP, trigger: "SYNC" });
+
+    expect(summaries.find((s) => s.ruleId === sale.id)?.restoredProducts).toBe(1);
+  });
+
+  it("không gỡ gì khi collection đã bị xóa (không biết sản phẩm nào thật sự rời)", async () => {
+    const sale = rule({ scope: "COLLECTION", scopeValue: "gid://shopify/Collection/404", restoreOnLeave: true });
+    const ctx = setup([sale], [product(5, { publishedByRules: published(sale.id, 5) })], {});
+
+    const [summary] = await ctx.apply().execute({ shopDomain: SHOP, trigger: "SYNC" });
+
+    expect(summary).toMatchObject({ collectionMissing: true, restoredProducts: 0 });
+    expect(ctx.restoreQueue.requestRestore).not.toHaveBeenCalled();
+    expect(ctx.writer.clearAutoState).not.toHaveBeenCalled();
+  });
+
+  it("rule tắt restoreOnLeave thì không bao giờ gỡ ảnh", async () => {
+    const sale = rule({ scope: "COLLECTION", scopeValue: SALE, syncScope: true, restoreOnLeave: false });
+    const ctx = setup([sale], [product(5, { publishedByRules: published(sale.id, 5) })], { [SALE]: [] });
+
+    await ctx.apply().execute({ shopDomain: SHOP, trigger: "SYNC" });
+
+    expect(ctx.restoreQueue.requestRestore).not.toHaveBeenCalled();
+  });
+
+  it("rule chỉ bật restoreOnLeave vẫn được kiểm tra hằng đêm nhưng không tạo job mới", async () => {
+    const sale = rule({ scope: "COLLECTION", scopeValue: SALE, syncScope: false, restoreOnLeave: true });
+    const ctx = setup([sale], [product(1), product(5, { publishedByRules: published(sale.id, 5) })], { [SALE]: [1] });
+
+    const [summary] = await ctx.apply().execute({ shopDomain: SHOP, trigger: "SYNC" });
+
+    expect(summary).toMatchObject({ createdJobs: 0, restoredProducts: 1 });
+    expect(ctx.writer.createJobs).not.toHaveBeenCalled();
   });
 });
 
@@ -242,6 +325,7 @@ describe("ManageAutoWatermarkRules", () => {
     onPrimaryChanged: true,
     syncScope: true,
     autoPublish: true,
+    restoreOnLeave: false,
   };
 
   it("tạo rule collection: lấy tên collection từ Shopify, lưu design và áp ngay nếu được yêu cầu", async () => {

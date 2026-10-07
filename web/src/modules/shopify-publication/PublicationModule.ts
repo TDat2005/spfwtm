@@ -8,6 +8,8 @@ import { PrismaPublicationAttemptRepository } from "../product-media-sync/infras
 import { ProductMediaSyncModule } from "../product-media-sync/ProductMediaSyncModule.ts";
 import { ListPublishedMedia } from "./application/ListPublishedMedia.ts";
 import type { PublishedMediaRepository } from "./application/PublishedMediaRepository.ts";
+import { PrismaAppMediaRegistry } from "./infrastructure/PrismaAppMediaRegistry.ts";
+import { PrismaCatalogRestoreWriter } from "./infrastructure/PrismaCatalogRestoreWriter.ts";
 import { PrismaPublishedMediaRepository } from "./infrastructure/PrismaPublishedMediaRepository.ts";
 import { PrismaWatermarkResultReader } from "./infrastructure/PrismaWatermarkResultReader.ts";
 import { PublicationJobHandlers } from "./infrastructure/PublicationJobHandlers.ts";
@@ -51,6 +53,8 @@ const PUBLISHED_MEDIA_REPOSITORY = Symbol("PUBLISHED_MEDIA_REPOSITORY");
           new PrismaWatermarkResultReader(prisma, mediaStorage),
           publishedMedia,
           publicationAttempts,
+          new PrismaAppMediaRegistry(prisma),
+          new PrismaCatalogRestoreWriter(prisma),
         ),
     },
     PublicationJobHandlers,

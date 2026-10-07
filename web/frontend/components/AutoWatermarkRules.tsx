@@ -32,6 +32,7 @@ interface RuleDto {
   onPrimaryChanged: boolean;
   syncScope: boolean;
   autoPublish: boolean;
+  restoreOnLeave: boolean;
   lastAppliedAt: string | null;
   design: { layers: SerializedWatermarkLayer[]; summary: string } | null;
 }
@@ -62,6 +63,7 @@ const emptyForm = {
   onPrimaryChanged: true,
   syncScope: true,
   autoPublish: false,
+  restoreOnLeave: false,
   applyNow: true,
 };
 
@@ -112,6 +114,7 @@ export function AutoWatermarkRules({ layers, designError, productTypes }: AutoWa
           onPrimaryChanged: form.onPrimaryChanged,
           syncScope: form.syncScope,
           autoPublish: form.autoPublish,
+          restoreOnLeave: form.restoreOnLeave,
           applyNow: form.applyNow,
           layers,
         }),
@@ -359,6 +362,12 @@ export function AutoWatermarkRules({ layers, designError, productTypes }: AutoWa
                   helpText="Tắt thì ảnh chỉ được tạo trong app để bạn xem trước rồi tự xuất bản."
                 />
                 <Checkbox
+                  label="Khi sản phẩm rời phạm vi: gỡ ảnh watermark của rule này trên Shopify"
+                  checked={form.restoreOnLeave}
+                  onChange={(restoreOnLeave) => update({ restoreOnLeave })}
+                  helpText="Kiểm tra mỗi đêm. Chỉ gỡ ảnh do chính rule này đưa lên; ảnh bạn tự làm và ảnh gốc luôn được giữ."
+                />
+                <Checkbox
                   label="Áp ngay cho sản phẩm đang nằm trong phạm vi"
                   checked={form.applyNow}
                   onChange={(applyNow) => update({ applyNow })}
@@ -405,7 +414,13 @@ function triggerText(rule: RuleDto): string {
     rule.syncScope && "Đồng bộ hằng đêm",
   ].filter(Boolean);
   const when = parts.length > 0 ? parts.join(", ") : "Chỉ khi bấm Áp dụng";
-  return rule.autoPublish ? `${when} · Tự đưa lên Shopify` : when;
+  return [
+    when,
+    rule.autoPublish && "Tự đưa lên Shopify",
+    rule.restoreOnLeave && "Gỡ ảnh khi rời phạm vi",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function useDebounced<T>(value: T, delayMs: number): T {

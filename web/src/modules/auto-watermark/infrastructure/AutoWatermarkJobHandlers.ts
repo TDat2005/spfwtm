@@ -65,6 +65,7 @@ export class AutoWatermarkJobHandlers implements OnModuleInit, OnApplicationBoot
       for (const summary of summaries) {
         this.logger.log(
           `${shopDomain} · rule "${summary.ruleName}": ${summary.createdJobs}/${summary.ownedProducts} sản phẩm cần đóng dấu` +
+            (summary.restoredProducts ? `, gỡ ảnh ${summary.restoredProducts} sản phẩm rời phạm vi` : "") +
             (summary.collectionMissing ? " (collection không còn tồn tại)" : ""),
         );
       }

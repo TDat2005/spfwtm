@@ -3,6 +3,7 @@ import type { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
 import {
   AUTO_WATERMARK_APPLY_V1,
   JOB_PRIORITY,
+  PUBLICATION_RESTORE_V1,
   WATERMARK_PROCESS_V1,
 } from "../../jobs/domain/JobDefinitions.ts";
 import type { DispatchWatermarkBatch } from "../../watermark/application/DispatchWatermarkBatch.ts";
@@ -14,6 +15,7 @@ import {
 import type {
   AutoWatermarkApplyQueue,
   AutoWatermarkJobQueue,
+  AutoWatermarkRestoreQueue,
   WatermarkDesignStore,
 } from "../application/AutoWatermarkPorts.ts";
 
@@ -53,6 +55,22 @@ export class BullMqAutoWatermarkApplyQueue implements AutoWatermarkApplyQueue {
       payload: input,
       removeOnComplete: true,
     });
+  }
+}
+
+export class BullMqAutoWatermarkRestoreQueue implements AutoWatermarkRestoreQueue {
+  constructor(private readonly enqueue: EnqueueJob) {}
+
+  async requestRestore(input: { shopDomain: string; watermarkJobIds: string[] }): Promise<void> {
+    await this.enqueue.executeMany(
+      input.watermarkJobIds.map((watermarkJobId) => ({
+        ...PUBLICATION_RESTORE_V1,
+        jobId: `restore_${watermarkJobId}`,
+        payload: { watermarkJobId, shopDomain: input.shopDomain },
+        maxAttempts: 5,
+        removeOnComplete: true,
+      }))
+    );
   }
 }
 

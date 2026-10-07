@@ -1,7 +1,11 @@
 import { Inject, Injectable, Logger, type OnModuleInit } from "@nestjs/common";
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import { PRISMA_CLIENT, SHOPIFY, type ShopifyApp } from "../../../shared/nest/tokens.ts";
-import { PUBLICATION_PUBLISH_V1, assertJobVersion } from "../../jobs/domain/JobDefinitions.ts";
+import {
+  PUBLICATION_PUBLISH_V1,
+  PUBLICATION_RESTORE_V1,
+  assertJobVersion,
+} from "../../jobs/domain/JobDefinitions.ts";
 import { BullMqWorker } from "../../jobs/infrastructure/BullMqWorker.ts";
 import { PublicationUseCaseFactory } from "./PublicationUseCaseFactory.ts";
 
@@ -21,6 +25,11 @@ export class PublicationJobHandlers implements OnModuleInit {
       assertJobVersion(payload, PUBLICATION_PUBLISH_V1);
       await this.publish(payload);
     });
+
+    this.worker.registerHandler(PUBLICATION_RESTORE_V1.jobName, async (payload) => {
+      assertJobVersion(payload, PUBLICATION_RESTORE_V1);
+      await this.restore(payload);
+    });
   }
 
   private async publish(payload: Record<string, unknown>): Promise<void> {
@@ -35,18 +44,39 @@ export class PublicationJobHandlers implements OnModuleInit {
       return;
     }
 
+    const session = await this.offlineSession(shopDomain);
+    await this.useCases.publishWatermarkedImage(session).execute({
+      watermarkJobId,
+      shopDomain,
+      replacePrevious: payload.replacePrevious === true,
+    });
+  }
+
+  /** Gỡ ảnh watermark của một job khỏi Shopify (rule bật restoreOnLeave). */
+  private async restore(payload: Record<string, unknown>): Promise<void> {
+    const watermarkJobId = String(payload.watermarkJobId ?? "");
+    const shopDomain = String(payload.shopDomain ?? "");
+    if (!watermarkJobId || !shopDomain) {
+      throw new Error("PUBLICATION_RESTORE_V1 thiếu watermarkJobId hoặc shopDomain");
+    }
+    // Đã gỡ (bởi merchant hoặc lần chạy trước) thì không còn gì để làm.
+    const published = await this.prisma.publishedMedia.count({
+      where: { watermarkJobId, shop: { domain: shopDomain } },
+    });
+    if (published === 0) return;
+
+    const session = await this.offlineSession(shopDomain);
+    await this.useCases.restoreOriginalImage(session).execute({ watermarkJobId, shopDomain });
+  }
+
+  private async offlineSession(shopDomain: string) {
     const session = await this.shopify.config.sessionStorage.loadSession(
       this.shopify.api.session.getOfflineId(shopDomain),
     );
     if (!session) {
       throw new Error(`Không tìm thấy offline session cho ${shopDomain}`);
     }
-
-    await this.useCases.publishWatermarkedImage(session).execute({
-      watermarkJobId,
-      shopDomain,
-      replacePrevious: payload.replacePrevious === true,
-    });
+    return session;
   }
 
   /**

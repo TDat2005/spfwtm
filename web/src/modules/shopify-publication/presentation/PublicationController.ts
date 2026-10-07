@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Logger, Param, Post } from "@nestjs/common";
 import type { Session } from "@shopify/shopify-api";
 import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
 import { toHttpException } from "../../../shared/nest/toHttpException.ts";
@@ -6,17 +6,18 @@ import { ListPublishedMedia } from "../application/ListPublishedMedia.ts";
 import type { PublishedMedia } from "../domain/PublishedMedia.ts";
 import { PublicationUseCaseFactory } from "../infrastructure/PublicationUseCaseFactory.ts";
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
-import { PRISMA_CLIENT, SHOPIFY, type ShopifyApp } from "../../../shared/nest/tokens.ts";
+import { PRISMA_CLIENT } from "../../../shared/nest/tokens.ts";
 import { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
 import { PUBLICATION_PUBLISH_V1 } from "../../jobs/domain/JobDefinitions.ts";
 
 @Controller("api/publications")
 export class PublicationController {
+  private readonly logger = new Logger(PublicationController.name);
+
   constructor(
     @Inject(ListPublishedMedia) private readonly listPublishedMedia: ListPublishedMedia,
     @Inject(PublicationUseCaseFactory) private readonly useCases: PublicationUseCaseFactory,
     @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
-    @Inject(SHOPIFY) private readonly shopify: ShopifyApp,
     @Inject(EnqueueJob) private readonly enqueueJob: EnqueueJob,
   ) {}
 
@@ -110,8 +111,15 @@ export class PublicationController {
   ) {
     try {
       const decodedProductId = decodeURIComponent(productId);
-      const result = await this.performProductRestore(decodedProductId, session);
-      return { success: true, ...result };
+      const result = await this.useCases.restoreProductOriginal(session).execute({
+        productId: decodedProductId,
+        shopDomain: session.shop,
+      });
+      return {
+        success: true,
+        productId: result.productId,
+        restoredImageUrl: result.restoredImageUrl,
+      };
     } catch (error) {
       throw toHttpException("Publication", error);
     }
@@ -147,13 +155,18 @@ export class PublicationController {
         new Set([...published.map((p) => p.shopifyProductId), ...wmProducts.map((p) => p.shopifyProductId)])
       );
 
+      // Chỉ chọn sản phẩm cần xét; việc xóa luôn đi qua use case, chỉ xóa media do app tạo.
+      const restoreProductOriginal = this.useCases.restoreProductOriginal(session);
       let restoredCount = 0;
       for (const pid of productIds) {
         try {
-          await this.performProductRestore(pid, session);
+          await restoreProductOriginal.execute({ productId: pid, shopDomain: session.shop });
           restoredCount++;
-        } catch {
-          // Continue with remaining products
+        } catch (error) {
+          // Một sản phẩm lỗi không chặn các sản phẩm còn lại, nhưng phải để lại dấu vết.
+          this.logger.warn(
+            `Không khôi phục được sản phẩm ${pid}: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
       }
 
@@ -161,154 +174,6 @@ export class PublicationController {
     } catch (error) {
       throw toHttpException("Publication", error);
     }
-  }
-
-  private async performProductRestore(decodedProductId: string, session: Session) {
-    const shop = await this.prisma.shop.findUnique({
-      where: { domain: session.shop },
-    });
-    if (!shop) throw new Error("Shop không tồn tại");
-
-    const catalogProduct = await this.prisma.catalogProduct.findFirst({
-      where: {
-        shopId: shop.id,
-        shopifyProductId: decodedProductId,
-      },
-    });
-
-    const publishedRecords = await this.prisma.publishedMedia.findMany({
-      where: {
-        shopId: shop.id,
-        shopifyProductId: decodedProductId,
-      },
-    });
-
-    const client = new this.shopify.api.clients.Graphql({ session });
-    const mediaIdsToDelete: string[] = publishedRecords.map((r) => r.shopifyMediaId);
-
-    // Query Shopify for current media list
-    const productQuery = await client.request<{
-      product?: {
-        id: string;
-        media: {
-          nodes: Array<{
-            id: string;
-            mediaContentType: string;
-            image?: { url: string };
-          }>;
-        };
-      };
-    }>(
-      `query GetProductMedia($id: ID!) {
-        product(id: $id) {
-          id
-          media(first: 20) {
-            nodes {
-              id
-              mediaContentType
-              ... on MediaImage {
-                image {
-                  url
-                }
-              }
-            }
-          }
-        }
-      }`,
-      { variables: { id: decodedProductId } }
-    );
-
-    const allMedia = productQuery.data?.product?.media.nodes ?? [];
-
-    for (const m of allMedia) {
-      if (
-        m.image?.url &&
-        (m.image.url.includes("/wm-") || (catalogProduct?.sourceMediaId && m.id === catalogProduct.sourceMediaId)) &&
-        allMedia.length > 1
-      ) {
-        if (!mediaIdsToDelete.includes(m.id)) {
-          mediaIdsToDelete.push(m.id);
-        }
-      }
-    }
-
-    if (mediaIdsToDelete.length > 0) {
-      await client.request(
-        `mutation ProductDeleteMedia($productId: ID!, $mediaIds: [ID!]!) {
-          productDeleteMedia(productId: $productId, mediaIds: $mediaIds) {
-            deletedMediaIds
-            userErrors {
-              field
-              message
-            }
-          }
-        }`,
-        {
-          variables: {
-            productId: decodedProductId,
-            mediaIds: mediaIdsToDelete,
-          },
-        }
-      );
-    }
-
-    if (publishedRecords.length > 0) {
-      await this.prisma.publishedMedia.deleteMany({
-        where: {
-          shopId: shop.id,
-          shopifyProductId: decodedProductId,
-        },
-      });
-    }
-
-    // Query Shopify again to get the new primary media
-    const refreshedQuery = await client.request<{
-      product?: {
-        media: {
-          nodes: Array<{
-            id: string;
-            image?: { url: string };
-          }>;
-        };
-      };
-    }>(
-      `query GetRefreshedMedia($id: ID!) {
-        product(id: $id) {
-          media(first: 1) {
-            nodes {
-              id
-              ... on MediaImage {
-                image {
-                  url
-                }
-              }
-            }
-          }
-        }
-      }`,
-      { variables: { id: decodedProductId } }
-    );
-
-    const newPrimary = refreshedQuery.data?.product?.media.nodes[0];
-    const newImageUrl = newPrimary?.image?.url ?? catalogProduct?.originalImageUrl ?? null;
-    const newMediaId = newPrimary?.id ?? null;
-
-    if (catalogProduct) {
-      await this.prisma.catalogProduct.update({
-        where: { id: catalogProduct.id },
-        data: {
-          imageUrl: newImageUrl,
-          originalImageUrl: newImageUrl,
-          sourceMediaId: newMediaId,
-          needsReview: false,
-        },
-      });
-    }
-
-    return {
-      productId: decodedProductId,
-      restoredImageUrl: newImageUrl,
-    };
   }
 }
 

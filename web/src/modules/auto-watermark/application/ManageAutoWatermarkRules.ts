@@ -25,6 +25,7 @@ export interface RuleSettingsInput {
   onPrimaryChanged: boolean;
   syncScope: boolean;
   autoPublish: boolean;
+  restoreOnLeave: boolean;
 }
 
 export interface RuleWithDesign {
