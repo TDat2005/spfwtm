@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AutoWatermarkModule } from "../modules/auto-watermark/AutoWatermarkModule.ts";
 import { CatalogModule } from "../modules/catalog/CatalogModule.ts";
 import { JobsModule } from "../modules/jobs/JobsModule.ts";
 import { MediaModule } from "../modules/media/MediaModule.ts";
@@ -18,6 +19,7 @@ import { SpaModule } from "./SpaModule.ts";
     CatalogModule,
     MediaModule,
     WatermarkModule,
+    AutoWatermarkModule,
     ProductMediaSyncModule,
     PublicationModule,
     ProductsModule,

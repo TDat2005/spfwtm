@@ -1,11 +1,4 @@
-import {
-  WatermarkConfiguration,
-  type WatermarkConfigurationProps,
-  type WatermarkFontFamily,
-  type WatermarkLayout,
-  type WatermarkPosition,
-  type WatermarkType,
-} from "./WatermarkConfiguration.ts";
+import { WatermarkDesign, type WatermarkLayerProps } from "./WatermarkDesign.ts";
 
 export type WatermarkJobStatus =
   | "PENDING"
@@ -22,13 +15,17 @@ export type {
   WatermarkPosition,
   WatermarkType,
 } from "./WatermarkConfiguration.ts";
+export { WatermarkDesign } from "./WatermarkDesign.ts";
+export type { WatermarkLayerProps } from "./WatermarkDesign.ts";
 
 export interface WatermarkJobProps {
   id: string;
   shopDomain: string;
   productId: string;
   sourceImageUrl: string;
-  configuration: WatermarkConfiguration | WatermarkConfigurationProps;
+  design: WatermarkDesign | ReadonlyArray<WatermarkLayerProps>;
+  /** Xong thì tự đưa lên Shopify (job do rule có autoPublish tạo). */
+  publishOnComplete?: boolean;
   status?: WatermarkJobStatus;
   resultMediaId?: string | null;
   errorMessage?: string | null;
@@ -40,7 +37,8 @@ export class WatermarkJob {
   readonly shopDomain: string;
   readonly productId: string;
   readonly sourceImageUrl: string;
-  readonly configuration: WatermarkConfiguration;
+  readonly design: WatermarkDesign;
+  readonly publishOnComplete: boolean;
   readonly createdAt: Date;
   private currentStatus: WatermarkJobStatus;
   private currentResultMediaId: string | null;
@@ -60,10 +58,11 @@ export class WatermarkJob {
     this.shopDomain = props.shopDomain;
     this.productId = props.productId;
     this.sourceImageUrl = props.sourceImageUrl;
-    this.configuration =
-      props.configuration instanceof WatermarkConfiguration
-        ? props.configuration
-        : new WatermarkConfiguration(props.configuration);
+    this.design =
+      props.design instanceof WatermarkDesign
+        ? props.design
+        : new WatermarkDesign(props.design);
+    this.publishOnComplete = props.publishOnComplete ?? false;
     this.currentStatus = props.status ?? "PENDING";
     this.currentResultMediaId = props.resultMediaId ?? null;
     this.currentErrorMessage = props.errorMessage ?? null;
@@ -78,52 +77,6 @@ export class WatermarkJob {
   }
   get errorMessage(): string | null {
     return this.currentErrorMessage;
-  }
-
-  get watermarkType(): WatermarkType {
-    return this.configuration.type;
-  }
-  get text(): string | null {
-    return this.configuration.text;
-  }
-  get logoUrl(): string | null {
-    return this.configuration.logoUrl;
-  }
-  get logoScale(): number {
-    return this.configuration.logoScale;
-  }
-  get position(): WatermarkPosition {
-    return this.configuration.position;
-  }
-  get opacity(): number {
-    return this.configuration.opacity;
-  }
-  get layout(): WatermarkLayout {
-    return this.configuration.layout;
-  }
-  get rotation(): number {
-    return this.configuration.rotation;
-  }
-  get offsetX(): number {
-    return this.configuration.offsetX;
-  }
-  get offsetY(): number {
-    return this.configuration.offsetY;
-  }
-  get fontFamily(): WatermarkFontFamily {
-    return this.configuration.fontFamily;
-  }
-  get fontSize(): number {
-    return this.configuration.fontSize;
-  }
-  get textColor(): string {
-    return this.configuration.textColor;
-  }
-  get strokeColor(): string {
-    return this.configuration.strokeColor;
-  }
-  get strokeWidth(): number {
-    return this.configuration.strokeWidth;
   }
 
   start(): void {

@@ -9,6 +9,8 @@ export interface PublishWatermarkedImageInput {
     watermarkJobId: string;
     shopDomain: string;
     altText?: string;
+    /** Sau khi đặt ảnh mới làm ảnh chính, xóa các ảnh watermark cũ của app trên sản phẩm. */
+    replacePrevious?: boolean;
 }
 export class PublishWatermarkedImage {
     constructor(
@@ -73,10 +75,27 @@ export class PublishWatermarkedImage {
                 publishResult.mediaId,
             );
             await this.publicationAttempts.complete(attemptId, input.shopDomain);
+            if (input.replacePrevious) {
+                await this.removePrevious(publishedMedia);
+            }
             return publishedMedia;
         } catch (error) {
             await this.publicationAttempts.fail(attemptId, input.shopDomain);
             throw error;
+        }
+    }
+
+    private async removePrevious(current: PublishedMedia): Promise<void> {
+        const previous = (
+            await this.publishedMediaRepository.listByProduct(current.shopDomain, current.productId)
+        ).filter((media) => media.id !== current.id);
+        if (previous.length === 0) return;
+        await this.shopifyMediaGateway.deleteMedia(
+            current.productId,
+            previous.map((media) => media.shopifyMediaId),
+        );
+        for (const media of previous) {
+            await this.publishedMediaRepository.delete(media.id);
         }
     }
 }

@@ -1,7 +1,4 @@
-import type {
-  WatermarkConfiguration,
-  WatermarkJob,
-} from "../domain/WatermarkJob.ts";
+import type { WatermarkDesign, WatermarkJob } from "../domain/WatermarkJob.ts";
 
 export interface WatermarkJobRepository {
   save(job: WatermarkJob): Promise<void>;
@@ -14,20 +11,19 @@ export interface ProductImageReader {
 }
 
 export interface WatermarkProcessor {
-  applyText(input: {
+  /** Render mọi lớp đang bật của design lên ảnh nguồn trong một lần encode. */
+  render(input: {
     source: Buffer;
-    configuration: WatermarkConfiguration;
-  }): Promise<{ bytes: Buffer; mimeType: string }>;
-
-  applyImage(input: {
-    source: Buffer;
-    logo: Buffer;
-    configuration: WatermarkConfiguration;
+    design: WatermarkDesign;
+    /** Bytes của logo theo đúng URL trong design.logoUrls. */
+    logos: ReadonlyMap<string, Buffer>;
   }): Promise<{ bytes: Buffer; mimeType: string }>;
 }
 
 export interface WatermarkMediaGateway {
   importSource(shopDomain: string, sourceUrl: string): Promise<Buffer>;
+  /** Logo dùng lại cho rất nhiều job nên được cache, không tải/lưu lại mỗi job. */
+  importLogo(shopDomain: string, logoUrl: string): Promise<Buffer>;
   storeResult(
     shopDomain: string,
     bytes: Buffer,

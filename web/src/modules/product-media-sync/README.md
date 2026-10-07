@@ -14,8 +14,11 @@ giai đoạn MVP.
    Payload webhook chỉ dùng để định danh product và lưu audit.
 5. `MediaChangeClassifier` so sánh ảnh chính với `sourceMediaId`,
    `PublishedMedia` và `PublicationAttempt`.
-6. Ở manual mode, ảnh mới của merchant tăng `sourceVersion` và đặt
-   `needsReview=true`; module không tự publish lại sản phẩm.
+6. Ảnh mới của merchant tăng `sourceVersion` và đặt `needsReview=true`. Module
+   này không tự đóng dấu: sản phẩm mới (`SOURCE_INITIALIZED`) và đổi ảnh chính
+   (`MERCHANT_PRIMARY_CHANGED`) được chuyển cho module `auto-watermark` qua job
+   `AUTO_WATERMARK_EVALUATE_V1`; rule nào sở hữu sản phẩm quyết định có đóng dấu
+   và tự publish hay không (xem [`../auto-watermark/README.md`](../auto-watermark/README.md)).
 
 ## Chống vòng lặp
 
@@ -29,7 +32,8 @@ trì hoãn ngắn để tránh tạo vòng lặp.
 - Sửa title/tag hoặc ảnh chính không đổi: bỏ qua.
 - Ảnh chính thuộc `PublishedMedia`: bỏ qua.
 - Publication đang chạy: retry reconcile, không tạo công việc watermark mới.
-- Merchant upload ảnh chính mới: cập nhật snapshot nguồn và báo review.
+- Merchant upload ảnh chính mới: cập nhật snapshot nguồn, báo review và nhờ
+  auto-watermark xét rule.
 - Chỉ reorder ảnh cũ: bỏ qua render.
 - Không còn ảnh hoặc product bị xóa: hủy watermark đang chờ và báo review.
 - Mọi lookup đều có `shopId`/shop domain để product ID giống nhau giữa hai shop

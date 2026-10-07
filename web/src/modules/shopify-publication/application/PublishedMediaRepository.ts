@@ -4,5 +4,6 @@ export interface PublishedMediaRepository {
     findByJobId(watermarkJobId: string, shopDomain: string): Promise<PublishedMedia | null>;
 
     listByShop(shopDomain: string): Promise<PublishedMedia[]>;
+    listByProduct(shopDomain: string, productId: string): Promise<PublishedMedia[]>;
     delete(id: string): Promise<void>;
 }

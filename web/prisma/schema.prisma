@@ -37,11 +37,12 @@ model Shop {
   mediaAssets         MediaAsset[]
   watermarkJobs       WatermarkJob[]
   watermarkBatches    WatermarkBatch[]
+  watermarkDesigns    WatermarkDesign[]
   publishedMedia      PublishedMedia[]
   webhookInbox        WebhookInbox[]
   publicationAttempts PublicationAttempt[]
   watermarkTemplates  WatermarkTemplate[]
-  autoWatermarkEnabled Boolean             @default(false)
+  autoWatermarkRules  AutoWatermarkRule[]
   uninstalledAt       DateTime?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -65,6 +66,12 @@ model CatalogProduct {
   sourceContentHash String?   @db.Char(64)
   needsReview       Boolean   @default(false)
   deletedAt         DateTime?
+
+  /// Job auto-watermark gần nhất đã tạo cho sản phẩm: rule, design và phiên bản
+  /// ảnh nguồn. Trùng cả ba thì rule không tạo job lặp lại.
+  autoRuleId        String? @db.VarChar(36)
+  autoDesignId      String? @db.VarChar(36)
+  autoSourceVersion Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -110,57 +117,29 @@ enum WatermarkJobStatus {
   CANCELLED
 }
 
-enum WatermarkPosition {
-  TOP_LEFT
-  TOP_CENTER
-  TOP_RIGHT
-  MIDDLE_LEFT
-  CENTER
-  MIDDLE_RIGHT
-  BOTTOM_LEFT
-  BOTTOM_CENTER
-  BOTTOM_RIGHT
-}
-
-enum WatermarkLayout {
-  SINGLE
-  TILED
-}
-
-enum WatermarkType {
-  TEXT
-  IMAGE
-}
-
 model WatermarkJob {
-  id               String             @id @db.VarChar(36)
-  shopId           String             @db.VarChar(30)
-  catalogProductId String             @db.VarChar(30)
-  batchId          String?            @db.VarChar(36)
-  sourceImageUrl   String             @db.Text
-  watermarkType    WatermarkType      @default(TEXT)
-  text             String?            @db.VarChar(100)
-  logoUrl          String?            @db.Text
-  logoScale        Float              @default(0.2)
-  position         WatermarkPosition
-  opacity          Float
-  layout           WatermarkLayout    @default(SINGLE)
-  rotation         Float              @default(0)
-  offsetX          Float              @default(0)
-  offsetY          Float              @default(0)
-  fontFamily       String             @default("Arial") @db.VarChar(50)
-  fontSize         Float              @default(0.045)
-  textColor        String             @default("#FFFFFF") @db.Char(7)
-  strokeColor      String             @default("#000000") @db.Char(7)
-  strokeWidth      Float              @default(2)
-  status           WatermarkJobStatus @default(PENDING)
-  resultMediaId    String?            @db.VarChar(36)
-  errorMessage     String?            @db.Text
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  id                String             @id @db.VarChar(36)
+  shopId            String             @db.VarChar(30)
+  catalogProductId  String             @db.VarChar(30)
+  batchId           String?            @db.VarChar(36)
+  sourceImageUrl    String             @db.Text
+  designId          String             @db.VarChar(36)
+  /// Rule đã tạo job này (null = merchant tạo tay).
+  ruleId            String?            @db.VarChar(36)
+  /// Xong thì tự đưa lên Shopify (rule bật autoPublish).
+  publishOnComplete Boolean            @default(false)
+  status            WatermarkJobStatus @default(PENDING)
+  /// Thời điểm job batch được đưa vào BullMQ; null = còn chờ DispatchWatermarkBatch.
+  enqueuedAt        DateTime?
+  resultMediaId     String?            @db.VarChar(36)
+  errorMessage      String?            @db.Text
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   shop                Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
   product             CatalogProduct       @relation(fields: [catalogProductId], references: [id], onDelete: Restrict)
+  design              WatermarkDesign      @relation(fields: [designId], references: [id], onDelete: Restrict)
+  rule                AutoWatermarkRule?   @relation(fields: [ruleId], references: [id], onDelete: SetNull)
   resultMedia         MediaAsset?          @relation("WatermarkResult", fields: [resultMediaId], references: [id], onDelete: SetNull)
   publishedMedia      PublishedMedia?
   publicationAttempts PublicationAttempt[]
@@ -168,18 +147,76 @@ model WatermarkJob {
 
   @@index([shopId, createdAt])
   @@index([shopId, status])
-  @@index([batchId, status])
+  @@index([batchId, status, enqueuedAt])
   @@map("watermark_jobs")
+}
+
+/// Thiết kế watermark nhiều lớp, bất biến. Trùng nội dung trong cùng shop thì dùng lại.
+model WatermarkDesign {
+  id          String   @id @db.VarChar(36)
+  shopId      String   @db.VarChar(30)
+  contentHash String   @db.Char(64)
+  /// JSON `{ version: 2, layers: [...] }`, xem WatermarkDesign.toJSON().
+  layers      String   @db.LongText
+  createdAt   DateTime @default(now())
+
+  shop    Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  jobs    WatermarkJob[]
+  batches WatermarkBatch[]
+  rules   AutoWatermarkRule[]
+
+  @@unique([shopId, contentHash])
+  @@map("watermark_designs")
+}
+
+enum AutoWatermarkScope {
+  ALL
+  COLLECTION
+  PRODUCT_TYPE
+}
+
+/// Rule tự đóng watermark: sản phẩm thuộc phạm vi (cả shop, một collection hoặc
+/// một product type) được đóng dấu bằng design của rule.
+model AutoWatermarkRule {
+  id               String             @id @db.VarChar(36)
+  shopId           String             @db.VarChar(30)
+  name             String             @db.VarChar(255)
+  enabled          Boolean            @default(true)
+  /// Số lớn hơn thắng khi một sản phẩm khớp nhiều rule.
+  priority         Int                @default(0)
+  scope            AutoWatermarkScope
+  /// GID collection hoặc product type; null khi scope = ALL.
+  scopeValue       String?            @db.VarChar(255)
+  /// Tên hiển thị của collection (chụp lại lúc tạo rule).
+  scopeLabel       String?            @db.VarChar(255)
+  designId         String             @db.VarChar(36)
+  onNewProduct     Boolean            @default(true)
+  onPrimaryChanged Boolean            @default(false)
+  /// Áp cho cả sản phẩm đang có trong phạm vi, kiểm tra lại hằng đêm.
+  syncScope        Boolean            @default(false)
+  autoPublish      Boolean            @default(false)
+  lastAppliedAt    DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  shop   Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  design WatermarkDesign @relation(fields: [designId], references: [id], onDelete: Restrict)
+  jobs   WatermarkJob[]
+
+  @@index([shopId, enabled])
+  @@map("auto_watermark_rules")
 }
 
 model WatermarkBatch {
   id        String   @id @db.VarChar(36)
   shopId    String   @db.VarChar(30)
+  designId  String?  @db.VarChar(36)
   totalJobs Int
   createdAt DateTime @default(now())
 
-  shop Shop           @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  jobs WatermarkJob[]
+  shop   Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  design WatermarkDesign? @relation(fields: [designId], references: [id], onDelete: SetNull)
+  jobs   WatermarkJob[]
 
   @@index([shopId, createdAt])
   @@map("watermark_batches")

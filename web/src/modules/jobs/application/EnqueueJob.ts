@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BackgroundJob } from "../domain/BackgroundJob.ts";
+import type { JobLane } from "../domain/JobDefinitions.ts";
 import type { JobPublisher } from "./JobQueue.ts";
 
 export interface EnqueueJobInput {
@@ -8,6 +9,8 @@ export interface EnqueueJobInput {
   payload: Record<string, unknown>;
   payloadVersion: number;
   processorVersion: number;
+  lane: JobLane;
+  priority: number;
   delayMs?: number;
   maxAttempts?: number;
   removeOnComplete?: boolean;
@@ -37,6 +40,8 @@ export class EnqueueJob {
       payload: input.payload,
       payloadVersion: input.payloadVersion,
       processorVersion: input.processorVersion,
+      lane: input.lane,
+      priority: input.priority,
       delayMs: input.delayMs,
       maxAttempts: input.maxAttempts ?? 3,
       removeOnComplete: input.removeOnComplete,

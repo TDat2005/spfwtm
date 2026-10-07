@@ -11,6 +11,7 @@ import { CancelWatermarkBatch } from "./application/CancelWatermarkBatch.ts";
 import { CancelWatermarkJob } from "./application/CancelWatermarkJob.ts";
 import { CreateWatermarkBatch } from "./application/CreateWatermarkBatch.ts";
 import { CreateWatermarkJob } from "./application/CreateWatermarkJob.ts";
+import { DispatchWatermarkBatch } from "./application/DispatchWatermarkBatch.ts";
 import { GetWatermarkJob } from "./application/GetWatermarkJob.ts";
 import { ListWatermarkBatches } from "./application/ListWatermarkBatches.ts";
 import { ListWatermarkJobs } from "./application/ListWatermarkJobs.ts";
@@ -20,7 +21,10 @@ import type { WatermarkJobRepository } from "./application/WatermarkPorts.ts";
 import { PrismaProductImageReader } from "./infrastructure/PrismaProductImageReader.ts";
 import { PrismaWatermarkBatchRepository } from "./infrastructure/PrismaWatermarkBatchRepository.ts";
 import { PrismaWatermarkJobRepository } from "./infrastructure/PrismaWatermarkJobRepository.ts";
-import { SharpWatermarkProcessor } from "./infrastructure/SharpWatermarkProcessor.ts";
+import {
+  SharpWatermarkProcessor,
+  configureSharpConcurrency,
+} from "./infrastructure/SharpWatermarkProcessor.ts";
 import { WatermarkJobHandlers } from "./infrastructure/WatermarkJobHandlers.ts";
 import { WatermarkController } from "./presentation/WatermarkController.ts";
 
@@ -58,26 +62,35 @@ function useCaseWith<R, T>(token: symbol, useCase: new (repository: R) => T) {
     {
       provide: ProcessWatermarkJob,
       inject: [WATERMARK_JOB_REPOSITORY, MediaService],
-      useFactory: (repository: WatermarkJobRepository, mediaService: MediaService) =>
-        new ProcessWatermarkJob(
+      useFactory: (repository: WatermarkJobRepository, mediaService: MediaService) => {
+        configureSharpConcurrency(process.env.SHARP_CONCURRENCY);
+        return new ProcessWatermarkJob(
           repository,
           new MediaWatermarkGateway(mediaService),
           new SharpWatermarkProcessor(),
-        ),
+        );
+      },
     },
     useCaseWith(WATERMARK_JOB_REPOSITORY, ListWatermarkJobs),
     useCaseWith(WATERMARK_JOB_REPOSITORY, GetWatermarkJob),
     useCaseWith(WATERMARK_JOB_REPOSITORY, RetryWatermarkJob),
     useCaseWith(WATERMARK_JOB_REPOSITORY, CancelWatermarkJob),
     {
-      provide: CreateWatermarkBatch,
+      provide: DispatchWatermarkBatch,
       inject: [WATERMARK_BATCH_REPOSITORY, EnqueueJob],
-      useFactory: (repository: WatermarkBatchRepository, enqueueJob: EnqueueJob) =>
-        new CreateWatermarkBatch(repository, enqueueJob),
+      useFactory: (repository: PrismaWatermarkBatchRepository, enqueueJob: EnqueueJob) =>
+        new DispatchWatermarkBatch(repository, enqueueJob),
+    },
+    {
+      provide: CreateWatermarkBatch,
+      inject: [WATERMARK_BATCH_REPOSITORY, DispatchWatermarkBatch],
+      useFactory: (repository: WatermarkBatchRepository, dispatcher: DispatchWatermarkBatch) =>
+        new CreateWatermarkBatch(repository, dispatcher),
     },
     useCaseWith(WATERMARK_BATCH_REPOSITORY, ListWatermarkBatches),
     useCaseWith(WATERMARK_BATCH_REPOSITORY, CancelWatermarkBatch),
     WatermarkJobHandlers,
   ],
+  exports: [DispatchWatermarkBatch],
 })
 export class WatermarkModule {}

@@ -1,47 +1,34 @@
 import { BadRequestException, Injectable, type PipeTransform } from "@nestjs/common";
 import type { WatermarkBatchSelection } from "../application/BulkWatermarkPorts.ts";
-import type {
-  WatermarkFontFamily,
-  WatermarkLayout,
-  WatermarkPosition,
-} from "../domain/WatermarkJob.ts";
+import {
+  MAX_WATERMARK_LAYERS,
+  toLayerProps,
+  type WatermarkLayerProps,
+} from "../domain/WatermarkDesign.ts";
 
-const positions = new Set<WatermarkPosition>([
-  "TOP_LEFT", "TOP_CENTER", "TOP_RIGHT", "MIDDLE_LEFT", "CENTER",
-  "MIDDLE_RIGHT", "BOTTOM_LEFT", "BOTTOM_CENTER", "BOTTOM_RIGHT",
-]);
-const layouts = new Set<WatermarkLayout>(["SINGLE", "TILED"]);
-
-export type WatermarkConfigurationInput = ReturnType<WatermarkConfigurationPipe["transform"]>;
-
+/**
+ * Nhận `{ layers: [...] }`. Body phẳng kiểu cũ (một cấu hình, `watermarkType`
+ * hoặc `type`) được hiểu là design có một lớp. Luật nghiệp vụ (giá trị hợp lệ,
+ * giới hạn số lớp logo/tiled) do WatermarkDesign kiểm tra.
+ */
 @Injectable()
-export class WatermarkConfigurationPipe implements PipeTransform {
-  transform(body: Record<string, unknown>) {
-    const position = String(body.position ?? "BOTTOM_RIGHT") as WatermarkPosition;
-    if (!positions.has(position)) {
-      throw new BadRequestException({ error: "Vị trí watermark không hợp lệ" });
+export class WatermarkLayersPipe implements PipeTransform {
+  transform(body: Record<string, unknown>): WatermarkLayerProps[] {
+    if (body.layers === undefined) return [toLayerProps(body)];
+    if (!Array.isArray(body.layers)) {
+      throw new BadRequestException({ error: "layers phải là một mảng" });
     }
-    const layout = String(body.layout ?? "SINGLE") as WatermarkLayout;
-    if (!layouts.has(layout)) {
-      throw new BadRequestException({ error: "Kiểu bố trí watermark không hợp lệ" });
+    if (body.layers.length > MAX_WATERMARK_LAYERS) {
+      throw new BadRequestException({
+        error: `Thiết kế watermark tối đa ${MAX_WATERMARK_LAYERS} lớp`,
+      });
     }
-    return {
-      type: body.watermarkType === "IMAGE" ? ("IMAGE" as const) : ("TEXT" as const),
-      text: body.text !== undefined && body.text !== null ? String(body.text) : null,
-      logoUrl: body.logoUrl !== undefined && body.logoUrl !== null ? String(body.logoUrl) : null,
-      logoScale: Number(body.logoScale ?? 0.2),
-      position,
-      opacity: Number(body.opacity ?? 0.7),
-      layout,
-      rotation: Number(body.rotation ?? 0),
-      offsetX: Number(body.offsetX ?? 0),
-      offsetY: Number(body.offsetY ?? 0),
-      fontFamily: String(body.fontFamily ?? "Arial") as WatermarkFontFamily,
-      fontSize: Number(body.fontSize ?? 0.045),
-      textColor: String(body.textColor ?? "#FFFFFF"),
-      strokeColor: String(body.strokeColor ?? "#000000"),
-      strokeWidth: Number(body.strokeWidth ?? 2),
-    };
+    return body.layers.map((layer, index) => {
+      if (!layer || typeof layer !== "object" || Array.isArray(layer)) {
+        throw new BadRequestException({ error: `Lớp ${index + 1} không hợp lệ` });
+      }
+      return toLayerProps(layer as Record<string, unknown>);
+    });
   }
 }
 

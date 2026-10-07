@@ -15,6 +15,7 @@
   },
   "include": [
   "index.ts",
+  "worker.ts",
   "src/**/*.ts",
   "src/**/*.js"
 ]

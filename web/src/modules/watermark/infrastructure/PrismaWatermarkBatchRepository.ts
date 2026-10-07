@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import type {
+  BatchDispatchState,
+  CreatedBatchJob,
   CreatedWatermarkBatch,
+  WatermarkBatchDispatchRepository,
   WatermarkBatchRepository,
   WatermarkBatchSelection,
   WatermarkBatchStatus,
   WatermarkBatchSummary,
 } from "../application/BulkWatermarkPorts.ts";
-import type { WatermarkConfiguration } from "../domain/WatermarkConfiguration.ts";
+import type { WatermarkDesign } from "../domain/WatermarkDesign.ts";
+import { saveWatermarkDesign } from "./PrismaWatermarkDesigns.ts";
 
 const CREATE_CHUNK_SIZE = 1_000;
 
@@ -22,7 +26,7 @@ interface BatchTarget {
 }
 
 export class PrismaWatermarkBatchRepository
-  implements WatermarkBatchRepository
+  implements WatermarkBatchRepository, WatermarkBatchDispatchRepository
 {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -30,7 +34,7 @@ export class PrismaWatermarkBatchRepository
     shopDomain: string;
     selection: WatermarkBatchSelection;
     maxJobs: number;
-    configuration: WatermarkConfiguration;
+    design: WatermarkDesign;
   }): Promise<CreatedWatermarkBatch> {
     return this.prisma.$transaction(async (transaction) => {
       const shop = await transaction.shop.findUnique({
@@ -49,6 +53,7 @@ export class PrismaWatermarkBatchRepository
         );
       }
 
+      const designId = await saveWatermarkDesign(transaction, shop.id, input.design);
       const batchId = randomUUID();
       const createdAt = new Date();
       const jobs = targets.map((product) => ({
@@ -62,6 +67,7 @@ export class PrismaWatermarkBatchRepository
         data: {
           id: batchId,
           shopId: shop.id,
+          designId,
           totalJobs: jobs.length,
           createdAt,
         },
@@ -74,21 +80,7 @@ export class PrismaWatermarkBatchRepository
             catalogProductId: job.catalogProductId,
             batchId,
             sourceImageUrl: job.sourceImageUrl,
-            watermarkType: input.configuration.type,
-            text: input.configuration.text,
-            logoUrl: input.configuration.logoUrl,
-            logoScale: input.configuration.logoScale,
-            position: input.configuration.position,
-            opacity: input.configuration.opacity,
-            layout: input.configuration.layout,
-            rotation: input.configuration.rotation,
-            offsetX: input.configuration.offsetX,
-            offsetY: input.configuration.offsetY,
-            fontFamily: input.configuration.fontFamily,
-            fontSize: input.configuration.fontSize,
-            textColor: input.configuration.textColor,
-            strokeColor: input.configuration.strokeColor,
-            strokeWidth: input.configuration.strokeWidth,
+            designId,
             status: "PENDING",
             createdAt,
           })),
@@ -156,6 +148,84 @@ export class PrismaWatermarkBatchRepository
       data: { status: "CANCELLED" },
     });
   }
+
+  async getDispatchState(
+    batchId: string,
+    staleBefore: Date
+  ): Promise<BatchDispatchState | null> {
+    const batch = await this.prisma.watermarkBatch.findUnique({
+      where: { id: batchId },
+      select: { id: true, totalJobs: true, shop: { select: { domain: true } } },
+    });
+    if (!batch) return null;
+
+    const inFlightJobs = await this.prisma.watermarkJob.count({
+      where: {
+        batchId,
+        OR: [
+          { status: "PROCESSING" },
+          { status: "PENDING", enqueuedAt: { gte: staleBefore } },
+        ],
+      },
+    });
+    return {
+      batchId: batch.id,
+      shopDomain: batch.shop.domain,
+      totalJobs: batch.totalJobs,
+      inFlightJobs,
+    };
+  }
+
+  async claimJobs(
+    batchId: string,
+    limit: number,
+    staleBefore: Date
+  ): Promise<CreatedBatchJob[]> {
+    const candidates = await this.prisma.watermarkJob.findMany({
+      where: { batchId, ...undispatchedPending(staleBefore) },
+      orderBy: { id: "asc" },
+      take: limit,
+      select: { id: true, product: { select: { shopifyProductId: true } } },
+    });
+    if (candidates.length === 0) return [];
+
+    await this.prisma.watermarkJob.updateMany({
+      where: { id: { in: candidates.map((job) => job.id) }, status: "PENDING" },
+      data: { enqueuedAt: new Date() },
+    });
+    return candidates.map((job) => ({
+      id: job.id,
+      productId: job.product.shopifyProductId,
+    }));
+  }
+
+  async releaseJobs(jobIds: string[]): Promise<void> {
+    if (jobIds.length === 0) return;
+    await this.prisma.watermarkJob.updateMany({
+      where: { id: { in: jobIds }, status: "PENDING" },
+      data: { enqueuedAt: null },
+    });
+  }
+
+  async listBatchesNeedingDispatch(
+    staleBefore: Date,
+    limit: number
+  ): Promise<string[]> {
+    const rows = await this.prisma.watermarkJob.findMany({
+      where: { batchId: { not: null }, ...undispatchedPending(staleBefore) },
+      distinct: ["batchId"],
+      select: { batchId: true },
+      take: limit,
+    });
+    return rows.flatMap((row) => (row.batchId ? [row.batchId] : []));
+  }
+}
+
+function undispatchedPending(staleBefore: Date) {
+  return {
+    status: "PENDING" as const,
+    OR: [{ enqueuedAt: null }, { enqueuedAt: { lt: staleBefore } }],
+  };
 }
 
 async function selectByIds(

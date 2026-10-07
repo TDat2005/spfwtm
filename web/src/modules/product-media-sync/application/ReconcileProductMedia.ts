@@ -17,6 +17,15 @@ export interface ProductMediaTrackingState {
   hasPublicationWithoutMediaId: boolean;
 }
 
+/** Yêu cầu xét rule auto-watermark cho sản phẩm (chạy ở job riêng, có retry). */
+export interface AutoWatermarkTrigger {
+  request(input: {
+    shopDomain: string;
+    productId: string;
+    trigger: "NEW_PRODUCT" | "PRIMARY_CHANGED";
+  }): Promise<void>;
+}
+
 export interface ProductMediaReconcileRepository {
   beginProcessing(webhookId: string): Promise<WebhookInboxItem | null>;
   getTrackingState(
@@ -42,6 +51,7 @@ export class ReconcileProductMedia {
   constructor(
     private readonly repository: ProductMediaReconcileRepository,
     private readonly gateway: ProductMediaGateway,
+    private readonly autoWatermark: AutoWatermarkTrigger,
     private readonly classifier = new MediaChangeClassifier()
   ) {}
 
@@ -71,6 +81,19 @@ export class ReconcileProductMedia {
       }
 
       await this.repository.applyChange({ inbox, product, change });
+      const trigger =
+        change.kind === "SOURCE_INITIALIZED"
+          ? "NEW_PRODUCT"
+          : change.kind === "MERCHANT_PRIMARY_CHANGED"
+            ? "PRIMARY_CHANGED"
+            : null;
+      if (trigger) {
+        await this.autoWatermark.request({
+          shopDomain: inbox.shopDomain,
+          productId: inbox.productId,
+          trigger,
+        });
+      }
       return change;
     } catch (error) {
       if (!(error instanceof PublicationStillInProgressError)) {

@@ -17,6 +17,7 @@ describe("StorageCleanupService", () => {
           { id: "asset-1", storageKey: "processed/shop1/job1.webp", byteSize: 200000 },
           { id: "asset-2", storageKey: "processed/shop1/job2.webp", byteSize: 300000 },
         ]),
+        delete: vi.fn().mockResolvedValue({}),
       },
     } as unknown as PrismaClient;
 
@@ -31,5 +32,28 @@ describe("StorageCleanupService", () => {
     expect(result.freedBytes).toBe(500000);
     expect(mockStorage.delete).toHaveBeenCalledWith("processed/shop1/job1.webp");
     expect(mockStorage.delete).toHaveBeenCalledWith("processed/shop1/job2.webp");
+    expect(mockPrisma.mediaAsset.delete).toHaveBeenCalledWith({ where: { id: "asset-1" } });
+    expect(mockPrisma.mediaAsset.delete).toHaveBeenCalledWith({ where: { id: "asset-2" } });
+  });
+
+  it("removes the row even when the file is already missing", async () => {
+    const mockStorage: MediaStorage = {
+      save: vi.fn(),
+      read: vi.fn(),
+      delete: vi.fn().mockResolvedValue(false),
+    };
+    const mockPrisma = {
+      mediaAsset: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: "asset-1", storageKey: "processed/shop1/job1.webp", byteSize: 200000 },
+        ]),
+        delete: vi.fn().mockResolvedValue({}),
+      },
+    } as unknown as PrismaClient;
+
+    const result = await new StorageCleanupService(mockPrisma, mockStorage).cleanupProcessedAssets();
+
+    expect(result).toEqual({ deletedAssetsCount: 1, freedBytes: 0 });
+    expect(mockPrisma.mediaAsset.delete).toHaveBeenCalledWith({ where: { id: "asset-1" } });
   });
 });

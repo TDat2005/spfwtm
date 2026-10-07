@@ -14,14 +14,11 @@ import { ListWatermarkJobs } from "../application/ListWatermarkJobs.ts";
 import { ProcessWatermarkJob } from "../application/ProcessWatermarkJob.ts";
 import { RetryWatermarkJob } from "../application/RetryWatermarkJob.ts";
 import type { WatermarkBatchSelection } from "../application/BulkWatermarkPorts.ts";
+import { WatermarkDesign, type WatermarkLayerProps } from "../domain/WatermarkDesign.ts";
 import type { WatermarkJob } from "../domain/WatermarkJob.ts";
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import { PRISMA_CLIENT } from "../../../shared/nest/tokens.ts";
-import {
-  BatchSelectionPipe,
-  WatermarkConfigurationPipe,
-  type WatermarkConfigurationInput,
-} from "./WatermarkPipes.ts";
+import { BatchSelectionPipe, WatermarkLayersPipe } from "./WatermarkPipes.ts";
 
 @Controller("api/watermarks")
 export class WatermarkController {
@@ -62,14 +59,14 @@ export class WatermarkController {
   @Post("batches")
   async createBatch(
     @Body(BatchSelectionPipe) selection: WatermarkBatchSelection,
-    @Body(WatermarkConfigurationPipe) configuration: WatermarkConfigurationInput,
+    @Body(WatermarkLayersPipe) layers: WatermarkLayerProps[],
     @ShopifySession() session: Session,
   ) {
     try {
       const batch = await this.createWatermarkBatch.execute({
         shopDomain: session.shop,
         selection,
-        configuration,
+        layers,
       });
       return {
         batch: {
@@ -98,7 +95,7 @@ export class WatermarkController {
   @Post("jobs")
   async createJob(
     @Body("productId") productId: unknown,
-    @Body(WatermarkConfigurationPipe) configuration: WatermarkConfigurationInput,
+    @Body(WatermarkLayersPipe) layers: WatermarkLayerProps[],
     @ShopifySession() session: Session,
   ) {
     try {
@@ -106,21 +103,7 @@ export class WatermarkController {
       const job = await this.createWatermarkJob.execute({
         shopDomain,
         productId: String(productId ?? ""),
-        watermarkType: configuration.type,
-        text: configuration.text,
-        logoUrl: configuration.logoUrl,
-        logoScale: configuration.logoScale,
-        position: configuration.position,
-        opacity: configuration.opacity,
-        layout: configuration.layout,
-        rotation: configuration.rotation,
-        offsetX: configuration.offsetX,
-        offsetY: configuration.offsetY,
-        fontFamily: configuration.fontFamily,
-        fontSize: configuration.fontSize,
-        textColor: configuration.textColor,
-        strokeColor: configuration.strokeColor,
-        strokeWidth: configuration.strokeWidth,
+        layers,
       });
       await this.enqueueJob.execute({
         ...WATERMARK_PROCESS_V1,
@@ -197,7 +180,7 @@ export class WatermarkController {
         templates: templates.map((t) => ({
           id: t.id,
           name: t.name,
-          config: JSON.parse(t.config),
+          config: normalizeTemplateConfig(t.config),
           isDefault: t.isDefault,
           createdAt: t.createdAt,
         })),
@@ -221,7 +204,8 @@ export class WatermarkController {
       if (!shop) throw new Error("Shop không tồn tại");
 
       const templateName = String(name || "Mẫu watermark").trim();
-      const configStr = typeof config === "string" ? config : JSON.stringify(config);
+      // Kiểm tra bằng domain và luôn lưu dạng v2 `{ version, layers }`.
+      const configStr = JSON.stringify(WatermarkDesign.fromJSON(config).toJSON());
       const makeDefault = Boolean(isDefault);
 
       if (makeDefault) {
@@ -244,7 +228,7 @@ export class WatermarkController {
         template: {
           id: template.id,
           name: template.name,
-          config: JSON.parse(template.config),
+          config: normalizeTemplateConfig(template.config),
           isDefault: template.isDefault,
           createdAt: template.createdAt,
         },
@@ -304,101 +288,27 @@ export class WatermarkController {
       throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
     }
   }
-
-  @Get("auto-rule")
-  async getAutoRule(@ShopifySession() session: Session) {
-    try {
-      const shop = await this.prisma.shop.findUnique({
-        where: { domain: session.shop },
-        include: {
-          watermarkTemplates: {
-            where: { isDefault: true },
-            take: 1,
-          },
-        },
-      });
-      if (!shop) return { enabled: false, defaultTemplate: null };
-
-      const defaultTemplate = shop.watermarkTemplates[0] ?? null;
-
-      return {
-        enabled: shop.autoWatermarkEnabled,
-        defaultTemplate: defaultTemplate
-          ? {
-              id: defaultTemplate.id,
-              name: defaultTemplate.name,
-              config: JSON.parse(defaultTemplate.config),
-            }
-          : null,
-      };
-    } catch (error) {
-      throw toHttpException("Watermark", error);
-    }
-  }
-
-  @Post("auto-rule")
-  @HttpCode(HttpStatus.OK)
-  async updateAutoRule(
-    @Body("enabled") enabled: unknown,
-    @Body("templateId") templateId: unknown,
-    @ShopifySession() session: Session,
-  ) {
-    try {
-      const shop = await this.prisma.shop.findUnique({
-        where: { domain: session.shop },
-      });
-      if (!shop) throw new Error("Shop không tồn tại");
-
-      const isEnabled = Boolean(enabled);
-
-      if (typeof templateId === "string" && templateId.trim()) {
-        await this.prisma.$transaction([
-          this.prisma.watermarkTemplate.updateMany({
-            where: { shopId: shop.id },
-            data: { isDefault: false },
-          }),
-          this.prisma.watermarkTemplate.updateMany({
-            where: { id: templateId, shopId: shop.id },
-            data: { isDefault: true },
-          }),
-        ]);
-      }
-
-      await this.prisma.shop.update({
-        where: { id: shop.id },
-        data: { autoWatermarkEnabled: isEnabled },
-      });
-
-      return { success: true, enabled: isEnabled };
-    } catch (error) {
-      throw toHttpException("Watermark", error, HttpStatus.BAD_REQUEST);
-    }
-  }
 }
 
 function toResponse(job: WatermarkJob) {
   return {
     id: job.id,
     productId: job.productId,
-    watermarkType: job.watermarkType,
-    text: job.text,
-    logoUrl: job.logoUrl,
-    logoScale: job.logoScale,
-    position: job.position,
-    opacity: job.opacity,
-    layout: job.layout,
-    rotation: job.rotation,
-    offsetX: job.offsetX,
-    offsetY: job.offsetY,
-    fontFamily: job.fontFamily,
-    fontSize: job.fontSize,
-    textColor: job.textColor,
-    strokeColor: job.strokeColor,
-    strokeWidth: job.strokeWidth,
+    layers: job.design.toJSON().layers,
+    summary: job.design.summary,
     status: job.status,
     resultMediaId: job.resultMediaId,
     resultUrl: job.resultMediaId ? `/api/media/assets/${job.resultMediaId}/content` : null,
     errorMessage: job.errorMessage,
     createdAt: job.createdAt,
   };
+}
+
+/** Template cũ (v1, cấu hình phẳng) được đọc thành design một lớp. */
+function normalizeTemplateConfig(raw: string) {
+  try {
+    return WatermarkDesign.fromJSON(raw).toJSON();
+  } catch {
+    return null;
+  }
 }

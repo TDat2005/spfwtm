@@ -1,4 +1,4 @@
-import type { WatermarkConfiguration } from "../domain/WatermarkConfiguration.ts";
+import type { WatermarkDesign } from "../domain/WatermarkDesign.ts";
 
 export interface CreatedBatchJob {
   id: string;
@@ -42,8 +42,27 @@ export interface WatermarkBatchRepository {
     shopDomain: string;
     selection: WatermarkBatchSelection;
     maxJobs: number;
-    configuration: WatermarkConfiguration;
+    design: WatermarkDesign;
   }): Promise<CreatedWatermarkBatch>;
   list(shopDomain: string): Promise<WatermarkBatchSummary[]>;
   cancel(batchId: string, shopDomain: string): Promise<void>;
+}
+
+export interface BatchDispatchState {
+  batchId: string;
+  shopDomain: string;
+  totalJobs: number;
+  /** Job đang chạy hoặc đã vào queue gần đây (enqueuedAt >= staleBefore). */
+  inFlightJobs: number;
+}
+
+export interface WatermarkBatchDispatchRepository {
+  getDispatchState(batchId: string, staleBefore: Date): Promise<BatchDispatchState | null>;
+  /**
+   * Đánh dấu tối đa `limit` job PENDING chưa vào queue (hoặc vào queue đã quá
+   * `staleBefore` — có thể bị mất) là vừa được đưa vào queue, rồi trả về chúng.
+   */
+  claimJobs(batchId: string, limit: number, staleBefore: Date): Promise<CreatedBatchJob[]>;
+  releaseJobs(jobIds: string[]): Promise<void>;
+  listBatchesNeedingDispatch(staleBefore: Date, limit: number): Promise<string[]>;
 }

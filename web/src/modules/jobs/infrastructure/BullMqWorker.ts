@@ -3,6 +3,7 @@ import {
   type ConnectionOptions,
   type Job,
 } from "bullmq";
+import type { JobLane } from "../domain/JobDefinitions.ts";
 
 export interface BullMqJobContext {
   isFinalAttempt: boolean;
@@ -13,63 +14,80 @@ export type BullMqJobHandler = (
   context: BullMqJobContext
 ) => Promise<void>;
 
-interface BullMqWorkerOptions {
+export interface BullMqWorkerLane {
+  lane: JobLane;
   queueName: string;
-  connection: ConnectionOptions;
   concurrency: number;
+}
+
+interface BullMqWorkerOptions {
+  /** Rỗng nghĩa là tiến trình này không xử lý job (chỉ đưa job vào queue). */
+  lanes: BullMqWorkerLane[];
+  connection: ConnectionOptions;
   prefix?: string;
 }
 
 export class BullMqWorker {
   private readonly handlers = new Map<string, BullMqJobHandler>();
-  private worker: Worker<Record<string, unknown>> | null = null;
+  private workers: Worker<Record<string, unknown>>[] = [];
+  private started = false;
 
   constructor(private readonly options: BullMqWorkerOptions) {}
 
   registerHandler(jobType: string, handler: BullMqJobHandler): void {
-    if (this.worker) {
+    if (this.started) {
       throw new Error("Phải đăng ký handler trước khi khởi động BullMQ worker");
     }
     this.handlers.set(jobType, handler);
   }
 
   start(): void {
-    if (this.worker) return;
+    if (this.started) return;
+    this.started = true;
+    if (this.options.lanes.length === 0) {
+      console.log("[BullMQ] Tiến trình này không chạy worker (WORKER_ENABLED=false).");
+      return;
+    }
+    this.workers = this.options.lanes.map((lane) => this.startLane(lane));
+  }
 
-    this.worker = new Worker<Record<string, unknown>>(
-      this.options.queueName,
+  async stop(): Promise<void> {
+    const workers = this.workers;
+    this.workers = [];
+    this.started = false;
+    if (workers.length === 0) return;
+    await Promise.all(workers.map((worker) => worker.close()));
+    console.log("[BullMQ] Worker đã dừng an toàn.");
+  }
+
+  private startLane(lane: BullMqWorkerLane): Worker<Record<string, unknown>> {
+    const worker = new Worker<Record<string, unknown>>(
+      lane.queueName,
       async (job) => this.process(job),
       {
         connection: this.options.connection,
-        concurrency: this.options.concurrency,
+        concurrency: lane.concurrency,
         prefix: this.options.prefix,
       }
     );
 
-    this.worker.on("completed", (job) => {
-      console.log(`[BullMQ] Hoàn thành ${job.name} (${job.id})`);
+    worker.on("completed", (job) => {
+      console.log(`[BullMQ:${lane.lane}] Hoàn thành ${job.name} (${job.id})`);
     });
-    this.worker.on("failed", (job, error) => {
+    worker.on("failed", (job, error) => {
       console.error(
-        `[BullMQ] Thất bại ${job?.name ?? "unknown"} (${job?.id ?? "unknown"}):`,
+        `[BullMQ:${lane.lane}] Thất bại ${job?.name ?? "unknown"} (${job?.id ?? "unknown"}):`,
         error.message
       );
     });
-    this.worker.on("error", (error) => {
-      console.error("[BullMQ] Lỗi kết nối worker:", error.message);
+    worker.on("error", (error) => {
+      console.error(`[BullMQ:${lane.lane}] Lỗi kết nối worker:`, error.message);
     });
 
     console.log(
-      `[BullMQ] Worker '${this.options.queueName}' đã khởi động, concurrency=${this.options.concurrency}.`
+      `[BullMQ] Worker lane '${lane.lane}' (queue '${lane.queueName}') đã khởi động, concurrency=${lane.concurrency}.`
     );
-  }
-
-  async stop(): Promise<void> {
-    const worker = this.worker;
-    this.worker = null;
-    if (!worker) return;
-    await worker.close();
-    console.log("[BullMQ] Worker đã dừng an toàn.");
+    return worker;
   }
 
   private async process(job: Job<Record<string, unknown>>): Promise<void> {

@@ -120,6 +120,32 @@ export class PrismaPublishedMediaRepository
         );
     }
 
+    async listByProduct(
+        shopDomain: string,
+        productId: string,
+    ): Promise<PublishedMedia[]> {
+        const rows = await this.prisma.publishedMedia.findMany({
+            where: {
+                shopifyProductId: productId,
+                shop: { domain: shopDomain },
+            },
+            include: { shop: true },
+        });
+
+        return rows.map(
+            (row) =>
+                new PublishedMedia({
+                    id: row.id,
+                    shopDomain: row.shop.domain,
+                    watermarkJobId: row.watermarkJobId,
+                    productId: row.shopifyProductId,
+                    shopifyMediaId: row.shopifyMediaId,
+                    imageUrl: row.imageUrl,
+                    createdAt: row.createdAt,
+                }),
+        );
+    }
+
     async delete(id: string): Promise<void> {
         const media = await this.prisma.publishedMedia.findUnique({
             where: { id },

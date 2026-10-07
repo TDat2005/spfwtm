@@ -44,24 +44,15 @@ export class ProcessWatermarkJob {
         job.sourceImageUrl
       );
 
-      let result: { bytes: Buffer; mimeType: string };
-
-      if (job.watermarkType === "IMAGE" && job.logoUrl) {
-        const logo = await this.media.importSource(
-          shopDomain,
-          job.logoUrl
-        );
-        result = await this.processor.applyImage({
-          source,
-          logo,
-          configuration: job.configuration,
-        });
-      } else {
-        result = await this.processor.applyText({
-          source,
-          configuration: job.configuration,
-        });
+      const logos = new Map<string, Buffer>();
+      for (const logoUrl of job.design.logoUrls) {
+        logos.set(logoUrl, await this.media.importLogo(shopDomain, logoUrl));
       }
+      const result = await this.processor.render({
+        source,
+        design: job.design,
+        logos,
+      });
 
       const resultMediaId = await this.media.storeResult(
         shopDomain,

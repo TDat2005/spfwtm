@@ -1,17 +1,22 @@
 export type WatermarkType = "TEXT" | "IMAGE";
 
-export type WatermarkPosition =
-  | "TOP_LEFT"
-  | "TOP_CENTER"
-  | "TOP_RIGHT"
-  | "MIDDLE_LEFT"
-  | "CENTER"
-  | "MIDDLE_RIGHT"
-  | "BOTTOM_LEFT"
-  | "BOTTOM_CENTER"
-  | "BOTTOM_RIGHT";
+export const WATERMARK_POSITIONS = [
+  "TOP_LEFT",
+  "TOP_CENTER",
+  "TOP_RIGHT",
+  "MIDDLE_LEFT",
+  "CENTER",
+  "MIDDLE_RIGHT",
+  "BOTTOM_LEFT",
+  "BOTTOM_CENTER",
+  "BOTTOM_RIGHT",
+] as const;
 
-export type WatermarkLayout = "SINGLE" | "TILED";
+export type WatermarkPosition = (typeof WATERMARK_POSITIONS)[number];
+
+export const WATERMARK_LAYOUTS = ["SINGLE", "TILED"] as const;
+
+export type WatermarkLayout = (typeof WATERMARK_LAYOUTS)[number];
 
 export const WATERMARK_FONT_FAMILIES = [
   "Arial",
@@ -60,9 +65,18 @@ export class WatermarkConfiguration {
 
   constructor(props: WatermarkConfigurationProps) {
     this.type = props.type ?? "TEXT";
+    if (this.type !== "TEXT" && this.type !== "IMAGE") {
+      throw new Error("Loại watermark không hợp lệ");
+    }
+    if (!WATERMARK_POSITIONS.includes(props.position)) {
+      throw new Error("Vị trí watermark không hợp lệ");
+    }
     this.position = props.position;
     this.opacity = numberInRange(props.opacity, 0, 1, "Opacity");
     this.layout = props.layout ?? "SINGLE";
+    if (!WATERMARK_LAYOUTS.includes(this.layout)) {
+      throw new Error("Kiểu bố trí watermark không hợp lệ");
+    }
     this.rotation = numberInRange(props.rotation ?? 0, -180, 180, "Góc xoay");
     this.offsetX = numberInRange(props.offsetX ?? 0, -0.5, 0.5, "Offset X");
     this.offsetY = numberInRange(props.offsetY ?? 0, -0.5, 0.5, "Offset Y");

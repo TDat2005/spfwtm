@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
 import type { CreatedWatermarkBatch, WatermarkBatchRepository } from "./BulkWatermarkPorts.ts";
 import { CreateWatermarkBatch } from "./CreateWatermarkBatch.ts";
 
 const SHOP = "test.myshopify.com";
-const configuration = { type: "TEXT" as const, text: "SALE", position: "CENTER" as const, opacity: 0.5 };
+const layers = [{ type: "TEXT" as const, text: "SALE", position: "CENTER" as const, opacity: 0.5 }];
 
 function setup(jobCount = 2) {
   const batch: CreatedWatermarkBatch = {
@@ -19,9 +18,9 @@ function setup(jobCount = 2) {
     list: vi.fn(),
     cancel: vi.fn(),
   };
-  const executeMany = vi.fn().mockResolvedValue([]);
-  const useCase = new CreateWatermarkBatch(repository, { executeMany } as unknown as EnqueueJob);
-  return { repository, executeMany, useCase };
+  const dispatch = vi.fn().mockResolvedValue(0);
+  const useCase = new CreateWatermarkBatch(repository, { execute: dispatch });
+  return { repository, dispatch, useCase };
 }
 
 describe("CreateWatermarkBatch", () => {
@@ -31,7 +30,7 @@ describe("CreateWatermarkBatch", () => {
     await useCase.execute({
       shopDomain: SHOP,
       selection: { kind: "PRODUCT_TYPE", productType: "  Áo thun " },
-      configuration,
+      layers,
     });
 
     expect(repository.create).toHaveBeenCalledWith(
@@ -48,7 +47,7 @@ describe("CreateWatermarkBatch", () => {
     await useCase.execute({
       shopDomain: SHOP,
       selection: { kind: "PRODUCT_TYPE", productType: "" },
-      configuration,
+      layers,
     });
 
     expect(repository.create).toHaveBeenCalledWith(
@@ -56,16 +55,17 @@ describe("CreateWatermarkBatch", () => {
     );
   });
 
-  it("chia nhỏ việc đưa job vào queue", async () => {
-    const { executeMany, useCase } = setup(2_500);
+  it("giao việc đưa job vào queue cho dispatcher thay vì đẩy cả batch một lần", async () => {
+    const { dispatch, useCase } = setup(2_500);
 
     await useCase.execute({
       shopDomain: SHOP,
       selection: { kind: "PRODUCT_TYPE", productType: "Giày" },
-      configuration,
+      layers,
     });
 
-    expect(executeMany.mock.calls.map(([jobs]) => jobs.length)).toEqual([1_000, 1_000, 500]);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith("batch-1");
   });
 
   it("vẫn giới hạn 1.000 sản phẩm khi chọn tay", async () => {
@@ -73,7 +73,7 @@ describe("CreateWatermarkBatch", () => {
     const productIds = Array.from({ length: 1_001 }, (_, i) => `p-${i}`);
 
     await expect(
-      useCase.execute({ shopDomain: SHOP, selection: { kind: "PRODUCT_IDS", productIds }, configuration }),
+      useCase.execute({ shopDomain: SHOP, selection: { kind: "PRODUCT_IDS", productIds }, layers }),
     ).rejects.toThrow("tối đa 1.000");
   });
 });

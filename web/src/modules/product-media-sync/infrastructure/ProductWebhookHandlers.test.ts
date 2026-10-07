@@ -4,11 +4,12 @@ import type { ReceiveProductWebhook } from "../application/ReceiveProductWebhook
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 
 describe("ProductWebhookHandlers", () => {
-  it("handles APP_UNINSTALLED by marking shop uninstalled and deleting sessions", async () => {
+  it("handles APP_UNINSTALLED by marking shop uninstalled, disabling rules and deleting sessions", async () => {
     const mockReceiver = {} as ReceiveProductWebhook;
 
     const mockShopUpdate = vi.fn().mockResolvedValue({});
     const mockJobsUpdate = vi.fn().mockResolvedValue({});
+    const mockRulesUpdate = vi.fn().mockResolvedValue({});
     const mockTransaction = vi.fn().mockImplementation((actions) => Promise.all(actions));
 
     const mockPrisma = {
@@ -18,6 +19,9 @@ describe("ProductWebhookHandlers", () => {
       },
       watermarkJob: {
         updateMany: mockJobsUpdate,
+      },
+      autoWatermarkRule: {
+        updateMany: mockRulesUpdate,
       },
       $transaction: mockTransaction,
     } as unknown as PrismaClient;
@@ -51,6 +55,10 @@ describe("ProductWebhookHandlers", () => {
       select: { id: true },
     });
     expect(mockPrisma.$transaction).toHaveBeenCalled();
+    expect(mockRulesUpdate).toHaveBeenCalledWith({
+      where: { shopId: "shop-1" },
+      data: { enabled: false },
+    });
     expect(mockDeleteSessions).toHaveBeenCalledWith(["offline_test.myshopify.com"]);
   });
 });

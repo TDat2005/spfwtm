@@ -23,7 +23,17 @@ import {
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "react-query";
-import { WatermarkPreview, type WatermarkStyle } from "./WatermarkPreview";
+import { AutoWatermarkRules } from "./AutoWatermarkRules";
+import { WatermarkPreview } from "./WatermarkPreview";
+import { fetchJson } from "../utils/fetchJson";
+import {
+  MAX_LOGO_LAYERS,
+  MAX_TILED_LAYERS,
+  MAX_WATERMARK_LAYERS,
+  WatermarkDesign,
+  type SerializedWatermarkDesign,
+  type SerializedWatermarkLayer,
+} from "../../src/modules/watermark/domain/WatermarkDesign.ts";
 
 interface ProductDto extends Record<string, unknown> {
   id: string;
@@ -71,21 +81,8 @@ type WatermarkPosition =
 interface WatermarkJobDto {
   id: string;
   productId: string;
-  watermarkType?: "TEXT" | "IMAGE";
-  text: string | null;
-  logoUrl: string | null;
-  logoScale?: number;
-  position: WatermarkPosition;
-  opacity: number;
-  layout: "SINGLE" | "TILED";
-  rotation: number;
-  offsetX: number;
-  offsetY: number;
-  fontFamily: string;
-  fontSize: number;
-  textColor: string;
-  strokeColor: string;
-  strokeWidth: number;
+  layers: SerializedWatermarkLayer[];
+  summary: string;
   status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "CANCELLED";
   resultMediaId: string | null;
   resultUrl: string | null;
@@ -154,18 +151,13 @@ interface SuccessResponse {
 interface WatermarkTemplateDto {
   id: string;
   name: string;
-  config: WatermarkStyle;
+  config: SerializedWatermarkDesign | null;
   isDefault: boolean;
   createdAt: string;
 }
 
 interface TemplatesResponse {
   templates: WatermarkTemplateDto[];
-}
-
-interface AutoRuleResponse {
-  enabled: boolean;
-  defaultTemplate: WatermarkTemplateDto | null;
 }
 
 const ALL_TYPES = "all";
@@ -184,6 +176,50 @@ const positionOptions = [
   { label: "Góc dưới bên phải", value: "BOTTOM_RIGHT" },
 ];
 
+/** Một lớp trong trình chỉnh sửa; `id` chỉ dùng cho React, không gửi lên server. */
+type EditorLayer = SerializedWatermarkLayer & { id: string };
+
+let layerSequence = 0;
+const newLayerId = () => `layer-${Date.now()}-${++layerSequence}`;
+
+function newTextLayer(): EditorLayer {
+  return {
+    id: newLayerId(),
+    enabled: true,
+    type: "TEXT",
+    text: "© My Store",
+    logoUrl: null,
+    logoScale: 0.2,
+    position: "BOTTOM_RIGHT",
+    opacity: 0.7,
+    layout: "SINGLE",
+    rotation: 0,
+    offsetX: 0,
+    offsetY: 0,
+    fontFamily: "Arial",
+    fontSize: 0.045,
+    textColor: "#FFFFFF",
+    strokeColor: "#000000",
+    strokeWidth: 2,
+  };
+}
+
+function newLogoLayer(): EditorLayer {
+  return { ...newTextLayer(), type: "IMAGE", text: null, logoUrl: "", position: "TOP_LEFT" };
+}
+
+function toPayload(layers: EditorLayer[]): SerializedWatermarkLayer[] {
+  return layers.map(({ id: _id, ...layer }) => layer);
+}
+
+function layerLabel(layer: SerializedWatermarkLayer): string {
+  if (layer.type === "IMAGE") return layer.logoUrl ? "Logo" : "Logo (chưa chọn ảnh)";
+  return layer.text?.trim() ? `"${layer.text.trim()}"` : "Chữ (trống)";
+}
+
+const sliderValue = (value: number | [number, number]) =>
+  Array.isArray(value) ? value[0] : value;
+
 const fontOptions = [
   "Arial",
   "Helvetica",
@@ -196,23 +232,50 @@ export function UnifiedWatermarkStudio() {
   const shopify = useAppBridge();
   const queryClient = useQueryClient();
 
-  // --- Watermark Style State (Unified for both Single and Bulk) ---
-  const [watermarkType, setWatermarkType] = useState<"TEXT" | "IMAGE">("TEXT");
-  const [text, setText] = useState("© My Store");
-  const [logoUrl, setLogoUrl] = useState("");
+  // --- Thiết kế watermark nhiều lớp (dùng chung cho Single và Bulk) ---
+  const [layers, setLayers] = useState<EditorLayer[]>(() => [newTextLayer()]);
+  const [selectedLayerId, setSelectedLayerId] = useState<string>(() => layers[0].id);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
-  const [logoScalePercent, setLogoScalePercent] = useState(20);
-  const [position, setPosition] = useState<WatermarkPosition>("BOTTOM_RIGHT");
-  const [opacityPercent, setOpacityPercent] = useState(70);
-  const [layout, setLayout] = useState<"SINGLE" | "TILED">("SINGLE");
-  const [rotation, setRotation] = useState(0);
-  const [offsetXPercent, setOffsetXPercent] = useState(0);
-  const [offsetYPercent, setOffsetYPercent] = useState(0);
-  const [fontFamily, setFontFamily] = useState("Arial");
-  const [fontSizePercent, setFontSizePercent] = useState(4.5);
-  const [textColor, setTextColor] = useState("#FFFFFF");
-  const [strokeColor, setStrokeColor] = useState("#000000");
-  const [strokeWidth, setStrokeWidth] = useState(2);
+  const selectedLayer =
+    layers.find((layer) => layer.id === selectedLayerId) ?? layers[0];
+
+  const updateLayer = (id: string, patch: Partial<SerializedWatermarkLayer>) =>
+    setLayers((current) =>
+      current.map((layer) => (layer.id === id ? { ...layer, ...patch } : layer))
+    );
+  const updateSelected = (patch: Partial<SerializedWatermarkLayer>) =>
+    updateLayer(selectedLayer.id, patch);
+
+  const addLayer = (layer: EditorLayer) => {
+    setLayers((current) => [...current, layer]);
+    setSelectedLayerId(layer.id);
+  };
+  const duplicateLayer = (id: string) => {
+    const source = layers.find((layer) => layer.id === id);
+    if (!source) return;
+    const copy = { ...source, id: newLayerId() };
+    setLayers((current) => {
+      const index = current.findIndex((layer) => layer.id === id);
+      return [...current.slice(0, index + 1), copy, ...current.slice(index + 1)];
+    });
+    setSelectedLayerId(copy.id);
+  };
+  const removeLayer = (id: string) => {
+    if (layers.length <= 1) return;
+    const remaining = layers.filter((layer) => layer.id !== id);
+    setLayers(remaining);
+    if (selectedLayerId === id) setSelectedLayerId(remaining[remaining.length - 1].id);
+  };
+  /** direction = 1: đưa lên trên (chồng lên lớp kế tiếp); -1: đưa xuống dưới. */
+  const moveLayer = (id: string, direction: 1 | -1) =>
+    setLayers((current) => {
+      const index = current.findIndex((layer) => layer.id === id);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
 
   // --- Preview Product Selection ---
   const [previewProductId, setPreviewProductId] = useState<string>("");
@@ -234,7 +297,6 @@ export function UnifiedWatermarkStudio() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [newTemplateName, setNewTemplateName] = useState<string>("");
   const [showSaveTemplateModal, setShowSaveTemplateModal] = useState<boolean>(false);
-  const [saveAsDefault, setSaveAsDefault] = useState<boolean>(false);
 
   // --- Target Media Scope (Primary vs All Images) ---
   const [targetMediaScope, setTargetMediaScope] = useState<"PRIMARY" | "ALL">("PRIMARY");
@@ -243,12 +305,6 @@ export function UnifiedWatermarkStudio() {
   const templates = useQuery<TemplatesResponse, Error>(
     ["watermarkTemplates"],
     () => fetchJson<TemplatesResponse>("/api/watermarks/templates"),
-    { refetchOnWindowFocus: false }
-  );
-
-  const autoRule = useQuery<AutoRuleResponse, Error>(
-    ["watermarkAutoRule"],
-    () => fetchJson<AutoRuleResponse>("/api/watermarks/auto-rule"),
     { refetchOnWindowFocus: false }
   );
 
@@ -299,7 +355,8 @@ export function UnifiedWatermarkStudio() {
   const publications = useQuery<PublicationsResponse, Error>(
     ["publishedMedia"],
     () => fetchJson<PublicationsResponse>("/api/publications"),
-    { refetchOnWindowFocus: false }
+    // publish-all chạy nền qua BullMQ nên cần polling để thấy kết quả.
+    { refetchOnWindowFocus: false, refetchInterval: 5_000 }
   );
 
   const publishedByProductId = useMemo(() => {
@@ -392,53 +449,25 @@ export function UnifiedWatermarkStudio() {
     productsWithImage,
   ]);
 
-  // Active watermark style object for <WatermarkPreview />
-  const currentWatermarkStyle: WatermarkStyle = useMemo(
-    () => ({
-      watermarkType,
-      text,
-      logoUrl,
-      position,
-      opacity: opacityPercent / 100,
-      layout,
-      logoScale: logoScalePercent / 100,
-      rotation,
-      offsetX: offsetXPercent / 100,
-      offsetY: offsetYPercent / 100,
-      fontFamily,
-      fontSize: fontSizePercent / 100,
-      textColor,
-      strokeColor,
-      strokeWidth,
-    }),
-    [
-      watermarkType,
-      text,
-      logoUrl,
-      position,
-      opacityPercent,
-      layout,
-      logoScalePercent,
-      rotation,
-      offsetXPercent,
-      offsetYPercent,
-      fontFamily,
-      fontSizePercent,
-      textColor,
-      strokeColor,
-      strokeWidth,
-    ]
-  );
-
-  const configurationValid =
-    watermarkType === "TEXT"
-      ? text.trim().length > 0
-      : logoUrl.trim().length > 0;
+  // Kiểm tra bằng đúng domain của backend để UI và server cùng một luật.
+  const designError = useMemo(() => {
+    try {
+      new WatermarkDesign(toPayload(layers));
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }, [layers]);
+  const configurationValid = designError === null;
+  const activeLogoCount = layers.filter((l) => l.enabled && l.type === "IMAGE").length;
+  const activeTiledCount = layers.filter((l) => l.enabled && l.layout === "TILED").length;
 
   // --- Logo File Upload ---
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Giữ đúng lớp đang chọn lúc bắt đầu tải, kể cả khi người dùng đổi lớp giữa chừng.
+    const targetLayerId = selectedLayer.id;
     try {
       setIsUploadingLogo(true);
       const reader = new FileReader();
@@ -452,7 +481,7 @@ export function UnifiedWatermarkStudio() {
               body: JSON.stringify({ dataUrl: reader.result as string }),
             }
           );
-          setLogoUrl(res.url);
+          updateLayer(targetLayerId, { logoUrl: res.url });
           shopify.toast.show("Đã tải logo lên thành công");
         } catch (err: unknown) {
           shopify.toast.show(
@@ -515,21 +544,7 @@ export function UnifiedWatermarkStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           productId: singleProductId,
-          type: watermarkType,
-          text: watermarkType === "TEXT" ? text : null,
-          logoUrl: watermarkType === "IMAGE" ? logoUrl : null,
-          position,
-          opacity: opacityPercent / 100,
-          layout,
-          rotation,
-          offsetX: offsetXPercent / 100,
-          offsetY: offsetYPercent / 100,
-          fontFamily,
-          fontSize: fontSizePercent / 100,
-          textColor,
-          strokeColor,
-          strokeWidth,
-          logoScale: logoScalePercent / 100,
+          layers: toPayload(layers),
         }),
       });
     },
@@ -579,21 +594,7 @@ export function UnifiedWatermarkStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...selection,
-          type: watermarkType,
-          text: watermarkType === "TEXT" ? text : null,
-          logoUrl: watermarkType === "IMAGE" ? logoUrl : null,
-          position,
-          opacity: opacityPercent / 100,
-          layout,
-          rotation,
-          offsetX: offsetXPercent / 100,
-          offsetY: offsetYPercent / 100,
-          fontFamily,
-          fontSize: fontSizePercent / 100,
-          textColor,
-          strokeColor,
-          strokeWidth,
-          logoScale: logoScalePercent / 100,
+          layers: toPayload(layers),
         }),
       });
     },
@@ -720,12 +721,12 @@ export function UnifiedWatermarkStudio() {
 
   // --- Bulk Publish Batch Mutation ---
   const publishBatch = useMutation<
-    { success: boolean; publishedCount: number; failedCount: number; totalCompleted: number },
+    { success: boolean; queuedCount: number },
     Error,
     string
   >(
     (batchId) =>
-      fetchJson<{ success: boolean; publishedCount: number; failedCount: number; totalCompleted: number }>(
+      fetchJson<{ success: boolean; queuedCount: number }>(
         `/api/publications/batches/${encodeURIComponent(batchId)}/publish-all`,
         { method: "POST" }
       ),
@@ -735,7 +736,9 @@ export function UnifiedWatermarkStudio() {
         void queryClient.invalidateQueries(["catalogProducts"]);
         void queryClient.invalidateQueries(["watermarkBatches"]);
         shopify.toast.show(
-          `Đã xuất bản thành công ${data.publishedCount}/${data.totalCompleted} ảnh lên Shopify!`
+          data.queuedCount > 0
+            ? `Đã đưa ${data.queuedCount} ảnh vào hàng đợi xuất bản lên Shopify`
+            : "Không còn ảnh nào cần xuất bản trong batch này"
         );
       },
       onError: (err) =>
@@ -775,15 +778,13 @@ export function UnifiedWatermarkStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: newTemplateName.trim(),
-          config: currentWatermarkStyle,
-          isDefault: saveAsDefault,
+          config: { version: 2, layers: toPayload(layers) },
         }),
       });
     },
     {
       onSuccess: ({ template }) => {
         void queryClient.invalidateQueries(["watermarkTemplates"]);
-        void queryClient.invalidateQueries(["watermarkAutoRule"]);
         setSelectedTemplateId(template.id);
         setShowSaveTemplateModal(false);
         setNewTemplateName("");
@@ -806,7 +807,6 @@ export function UnifiedWatermarkStudio() {
     {
       onSuccess: () => {
         void queryClient.invalidateQueries(["watermarkTemplates"]);
-        void queryClient.invalidateQueries(["watermarkAutoRule"]);
         setSelectedTemplateId("");
         shopify.toast.show("Đã xóa mẫu watermark");
       },
@@ -818,48 +818,26 @@ export function UnifiedWatermarkStudio() {
     }
   );
 
-  const updateAutoRuleMutation = useMutation(
-    async ({ enabled, templateId }: { enabled: boolean; templateId?: string }) => {
-      return await fetchJson<SuccessResponse>("/api/watermarks/auto-rule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled, templateId }),
-      });
-    },
-    {
-      onSuccess: () => {
-        void queryClient.invalidateQueries(["watermarkAutoRule"]);
-        shopify.toast.show("Đã cập nhật quy tắc tự động đóng dấu");
-      },
-      onError: (err: unknown) =>
-        shopify.toast.show(
-          `Lỗi cập nhật: ${err instanceof Error ? err.message : String(err)}`,
-          { isError: true }
-        ),
-    }
-  );
-
   const handleSelectTemplate = (templateId: string) => {
     setSelectedTemplateId(templateId);
     if (!templateId) return;
     const tmpl = templates.data?.templates.find((t) => t.id === templateId);
     if (!tmpl) return;
-    const cfg = tmpl.config;
-    if (cfg.watermarkType) setWatermarkType(cfg.watermarkType);
-    if (cfg.text !== undefined && cfg.text !== null) setText(cfg.text);
-    if (cfg.logoUrl !== undefined && cfg.logoUrl !== null) setLogoUrl(cfg.logoUrl);
-    if (cfg.logoScale) setLogoScalePercent(Math.round(cfg.logoScale * 100));
-    if (cfg.position) setPosition(cfg.position);
-    if (cfg.opacity) setOpacityPercent(Math.round(cfg.opacity * 100));
-    if (cfg.layout) setLayout(cfg.layout);
-    if (cfg.rotation !== undefined) setRotation(cfg.rotation);
-    if (cfg.offsetX !== undefined) setOffsetXPercent(Math.round(cfg.offsetX * 100));
-    if (cfg.offsetY !== undefined) setOffsetYPercent(Math.round(cfg.offsetY * 100));
-    if (cfg.fontFamily) setFontFamily(cfg.fontFamily);
-    if (cfg.fontSize) setFontSizePercent(Number((cfg.fontSize * 100).toFixed(1)));
-    if (cfg.textColor) setTextColor(cfg.textColor);
-    if (cfg.strokeColor) setStrokeColor(cfg.strokeColor);
-    if (cfg.strokeWidth !== undefined) setStrokeWidth(cfg.strokeWidth);
+    let loaded: EditorLayer[];
+    try {
+      if (!tmpl.config) throw new Error("Mẫu không hợp lệ");
+      loaded = WatermarkDesign.fromJSON(tmpl.config)
+        .toJSON()
+        .layers.map((layer) => ({ ...layer, id: newLayerId() }));
+    } catch (error) {
+      shopify.toast.show(
+        `Không áp dụng được mẫu: ${error instanceof Error ? error.message : String(error)}`,
+        { isError: true }
+      );
+      return;
+    }
+    setLayers(loaded);
+    setSelectedLayerId(loaded[0].id);
     shopify.toast.show(`Đã áp dụng mẫu "${tmpl.name}"`);
   };
 
@@ -1021,7 +999,7 @@ export function UnifiedWatermarkStudio() {
         timeStyle: "medium",
       }).format(new Date(job.createdAt)),
       title,
-      job.watermarkType === "IMAGE" ? "🖼 [Logo]" : job.text ?? "—",
+      job.summary || "—",
       jobStatusBadge(job.status),
       job.resultUrl ? (
         <Stack key={`${job.id}-actions`} vertical spacing="extraTight">
@@ -1163,7 +1141,7 @@ export function UnifiedWatermarkStudio() {
                   options={[
                     { label: "— Chọn mẫu đã lưu để áp dụng nhanh —", value: "" },
                     ...(templates.data?.templates ?? []).map((t) => ({
-                      label: `${t.name}${t.isDefault ? " [Mặc định tự động]" : ""}`,
+                      label: t.name,
                       value: t.id,
                     })),
                   ]}
@@ -1189,12 +1167,6 @@ export function UnifiedWatermarkStudio() {
                         placeholder="Ví dụ: Logo góc phải 20%, Bản quyền trung tâm..."
                         autoComplete="off"
                       />
-                      <Checkbox
-                        label="Đặt làm mẫu mặc định cho Auto-watermark"
-                        checked={saveAsDefault}
-                        onChange={setSaveAsDefault}
-                        helpText="Khi bật tự động đóng dấu, sản phẩm mới tạo sẽ dùng cấu hình của mẫu này."
-                      />
                       <Stack distribution="trailing">
                         <Button size="slim" onClick={() => setShowSaveTemplateModal(false)}>
                           Hủy
@@ -1213,102 +1185,187 @@ export function UnifiedWatermarkStudio() {
                   </div>
                 )}
 
-                {/* Auto-watermark rule switch */}
-                <div style={{ marginTop: "6px", paddingTop: "8px", borderTop: "1px solid #E1E3E5" }}>
-                  <Stack distribution="equalSpacing" alignment="center">
-                    <Stack spacing="extraTight" vertical>
-                      <Text as="span" variant="bodySm" fontWeight="semibold">
-                        Tự động đóng dấu khi tạo sản phẩm mới:
-                      </Text>
-                      <Text as="span" variant="bodySm" color="subdued">
-                        {autoRule.data?.enabled && autoRule.data.defaultTemplate
-                          ? `Đang bật (Dùng mẫu: "${autoRule.data.defaultTemplate.name}")`
-                          : autoRule.data?.enabled
-                          ? "Đang bật"
-                          : "Đang tắt"}
-                      </Text>
-                    </Stack>
-                    <Button
-                      size="slim"
-                      pressed={Boolean(autoRule.data?.enabled)}
-                      onClick={() =>
-                        updateAutoRuleMutation.mutate({
-                          enabled: !autoRule.data?.enabled,
-                          templateId: selectedTemplateId || undefined,
-                        })
-                      }
-                    >
-                      {autoRule.data?.enabled ? "Tắt tự động" : "Bật tự động"}
-                    </Button>
-                  </Stack>
-                </div>
               </Stack>
             </div>
 
+            {/* Danh sách lớp: lớp trên cùng hiển thị đầu tiên, giống trình chỉnh sửa ảnh */}
+            <div style={{ marginBottom: "20px" }}>
+              <Stack vertical spacing="tight">
+                <Stack distribution="equalSpacing" alignment="center">
+                  <Text as="h3" variant="headingSm">
+                    {`Các lớp watermark (${layers.length}/${MAX_WATERMARK_LAYERS})`}
+                  </Text>
+                  <ButtonGroup>
+                    <Button
+                      size="slim"
+                      disabled={layers.length >= MAX_WATERMARK_LAYERS}
+                      onClick={() => addLayer(newTextLayer())}
+                    >
+                      + Lớp chữ
+                    </Button>
+                    <Button
+                      size="slim"
+                      disabled={
+                        layers.length >= MAX_WATERMARK_LAYERS ||
+                        activeLogoCount >= MAX_LOGO_LAYERS
+                      }
+                      onClick={() => addLayer(newLogoLayer())}
+                    >
+                      + Lớp logo
+                    </Button>
+                  </ButtonGroup>
+                </Stack>
+                <Text as="p" variant="bodySm" color="subdued">
+                  {`Lớp ở trên nằm đè lên lớp ở dưới. Tối đa ${MAX_LOGO_LAYERS} lớp logo và ${MAX_TILED_LAYERS} lớp lặp toàn ảnh đang bật.`}
+                </Text>
+                {layers
+                  .map((layer, index) => ({ layer, index }))
+                  .reverse()
+                  .map(({ layer, index }) => {
+                    const selected = layer.id === selectedLayer.id;
+                    return (
+                      <div
+                        key={layer.id}
+                        onClick={() => setSelectedLayerId(layer.id)}
+                        style={{
+                          cursor: "pointer",
+                          padding: "8px 12px",
+                          borderRadius: "6px",
+                          border: selected ? "2px solid #2C6ECB" : "1px solid #E1E3E5",
+                          background: selected ? "#F2F7FE" : "#FFFFFF",
+                          opacity: layer.enabled ? 1 : 0.55,
+                        }}
+                      >
+                        <Stack distribution="equalSpacing" alignment="center">
+                          <Stack spacing="tight" alignment="center">
+                            <Badge>{`Lớp ${index + 1}`}</Badge>
+                            <Text as="span" variant="bodyMd" fontWeight={selected ? "semibold" : "regular"}>
+                              {layerLabel(layer)}
+                            </Text>
+                            {layer.layout === "TILED" && <Badge status="info">Lặp</Badge>}
+                            {!layer.enabled && <Badge>Đang ẩn</Badge>}
+                          </Stack>
+                          <div onClick={(event) => event.stopPropagation()}>
+                            <ButtonGroup segmented>
+                              <Button
+                                size="slim"
+                                accessibilityLabel="Đưa lên trên"
+                                disabled={index === layers.length - 1}
+                                onClick={() => moveLayer(layer.id, 1)}
+                              >
+                                ↑
+                              </Button>
+                              <Button
+                                size="slim"
+                                accessibilityLabel="Đưa xuống dưới"
+                                disabled={index === 0}
+                                onClick={() => moveLayer(layer.id, -1)}
+                              >
+                                ↓
+                              </Button>
+                              <Button
+                                size="slim"
+                                onClick={() => updateLayer(layer.id, { enabled: !layer.enabled })}
+                              >
+                                {layer.enabled ? "Ẩn" : "Hiện"}
+                              </Button>
+                              <Button
+                                size="slim"
+                                disabled={layers.length >= MAX_WATERMARK_LAYERS}
+                                onClick={() => duplicateLayer(layer.id)}
+                              >
+                                Nhân bản
+                              </Button>
+                              <Button
+                                size="slim"
+                                destructive
+                                disabled={layers.length <= 1}
+                                onClick={() => removeLayer(layer.id)}
+                              >
+                                Xóa
+                              </Button>
+                            </ButtonGroup>
+                          </div>
+                        </Stack>
+                      </div>
+                    );
+                  })}
+                {designError && <Banner status="critical" title={designError} />}
+              </Stack>
+            </div>
+
+            <Text as="h3" variant="headingSm">
+              {`Chỉnh sửa lớp ${layers.findIndex((layer) => layer.id === selectedLayer.id) + 1}`}
+            </Text>
+            <div style={{ marginTop: "8px" }}>
             <FormLayout>
               <Select
-                label="Loại watermark"
+                label="Loại lớp"
                 options={[
                   { label: "Văn bản (Text)", value: "TEXT" },
                   { label: "Hình ảnh (Logo)", value: "IMAGE" },
                 ]}
-                value={watermarkType}
-                onChange={(val) => setWatermarkType(val as "TEXT" | "IMAGE")}
+                value={selectedLayer.type}
+                onChange={(val) =>
+                  updateSelected(
+                    val === "IMAGE"
+                      ? { type: "IMAGE", logoUrl: selectedLayer.logoUrl ?? "" }
+                      : { type: "TEXT", text: selectedLayer.text ?? "© My Store" }
+                  )
+                }
               />
 
-              {watermarkType === "TEXT" ? (
+              {selectedLayer.type === "TEXT" ? (
                 <>
                   <TextField
-                    label="Nội dung watermark"
-                    value={text}
+                    label="Nội dung"
+                    value={selectedLayer.text ?? ""}
                     autoComplete="off"
-                    onChange={setText}
+                    onChange={(val) => updateSelected({ text: val })}
                     helpText="Tối đa 100 ký tự"
                   />
                   <FormLayout.Group>
                     <Select
                       label="Font chữ"
                       options={fontOptions}
-                      value={fontFamily}
-                      onChange={setFontFamily}
+                      value={selectedLayer.fontFamily}
+                      onChange={(val) =>
+                        updateSelected({ fontFamily: val as SerializedWatermarkLayer["fontFamily"] })
+                      }
                     />
                     <TextField
                       label="Màu chữ"
-                      value={textColor}
+                      value={selectedLayer.textColor}
                       autoComplete="off"
-                      onChange={setTextColor}
+                      onChange={(val) => updateSelected({ textColor: val })}
                       helpText="Mã màu HEX, ví dụ: #FFFFFF"
                     />
                   </FormLayout.Group>
                   <FormLayout.Group>
                     <TextField
                       label="Màu viền"
-                      value={strokeColor}
+                      value={selectedLayer.strokeColor}
                       autoComplete="off"
-                      onChange={setStrokeColor}
+                      onChange={(val) => updateSelected({ strokeColor: val })}
                       helpText="Mã màu HEX, ví dụ: #000000"
                     />
                     <RangeSlider
-                      label={`Độ dày viền: ${strokeWidth}px`}
+                      label={`Độ dày viền: ${selectedLayer.strokeWidth}px`}
                       min={0}
                       max={10}
-                      value={strokeWidth}
+                      value={selectedLayer.strokeWidth}
                       output
-                      onChange={(val) =>
-                        setStrokeWidth(Array.isArray(val) ? val[0] : val)
-                      }
+                      onChange={(val) => updateSelected({ strokeWidth: sliderValue(val) })}
                     />
                   </FormLayout.Group>
                   <RangeSlider
-                    label={`Kích thước chữ: ${fontSizePercent}% chiều rộng ảnh`}
+                    label={`Kích thước chữ: ${Number((selectedLayer.fontSize * 100).toFixed(1))}% chiều rộng ảnh`}
                     min={1}
                     max={20}
                     step={0.5}
-                    value={fontSizePercent}
+                    value={Number((selectedLayer.fontSize * 100).toFixed(1))}
                     output
-                    onChange={(val) =>
-                      setFontSizePercent(Array.isArray(val) ? val[0] : val)
-                    }
+                    onChange={(val) => updateSelected({ fontSize: sliderValue(val) / 100 })}
                   />
                 </>
               ) : (
@@ -1326,78 +1383,88 @@ export function UnifiedWatermarkStudio() {
                   </Stack>
                   <TextField
                     label="Hoặc nhập URL logo (HTTPS)"
-                    value={logoUrl}
+                    value={selectedLayer.logoUrl ?? ""}
                     autoComplete="off"
-                    onChange={setLogoUrl}
+                    onChange={(val) => updateSelected({ logoUrl: val })}
                   />
                   <RangeSlider
-                    label={`Kích thước logo: ${logoScalePercent}% chiều rộng ảnh`}
+                    label={`Kích thước logo: ${Math.round(selectedLayer.logoScale * 100)}% chiều rộng ảnh`}
                     min={5}
                     max={100}
                     step={5}
-                    value={logoScalePercent}
+                    value={Math.round(selectedLayer.logoScale * 100)}
                     output
-                    onChange={(val) =>
-                      setLogoScalePercent(Array.isArray(val) ? val[0] : val)
-                    }
+                    onChange={(val) => updateSelected({ logoScale: sliderValue(val) / 100 })}
                   />
                 </>
               )}
 
               <FormLayout.Group>
                 <Select
-                  label="Vị trí watermark"
+                  label="Vị trí"
                   options={positionOptions}
-                  value={position}
-                  onChange={(val) => setPosition(val as WatermarkPosition)}
+                  value={selectedLayer.position}
+                  onChange={(val) =>
+                    updateSelected({ position: val as SerializedWatermarkLayer["position"] })
+                  }
                 />
                 <Select
                   label="Cách bố trí"
                   options={[
                     { label: "Một watermark", value: "SINGLE" },
-                    { label: "Lặp toàn bộ ảnh (Tiled)", value: "TILED" },
+                    {
+                      label: "Lặp toàn bộ ảnh (Tiled)",
+                      value: "TILED",
+                      disabled:
+                        selectedLayer.layout !== "TILED" &&
+                        selectedLayer.enabled &&
+                        activeTiledCount >= MAX_TILED_LAYERS,
+                    },
                   ]}
-                  value={layout}
-                  onChange={(val) => setLayout(val as "SINGLE" | "TILED")}
+                  value={selectedLayer.layout}
+                  onChange={(val) => updateSelected({ layout: val as "SINGLE" | "TILED" })}
                 />
               </FormLayout.Group>
 
               <RangeSlider
-                label={`Độ trong suốt: ${opacityPercent}%`}
+                label={`Độ trong suốt: ${Math.round(selectedLayer.opacity * 100)}%`}
                 min={10}
                 max={100}
                 step={5}
-                value={opacityPercent}
+                value={Math.round(selectedLayer.opacity * 100)}
                 output
-                onChange={(val) =>
-                  setOpacityPercent(Array.isArray(val) ? val[0] : val)
-                }
+                onChange={(val) => updateSelected({ opacity: sliderValue(val) / 100 })}
               />
 
+              <RangeSlider
+                label={`Góc xoay: ${selectedLayer.rotation}°`}
+                min={-180}
+                max={180}
+                step={5}
+                value={selectedLayer.rotation}
+                output
+                onChange={(val) => updateSelected({ rotation: sliderValue(val) })}
+              />
               <FormLayout.Group>
                 <RangeSlider
-                  label={`Góc xoay: ${rotation}°`}
-                  min={-180}
-                  max={180}
-                  step={5}
-                  value={rotation}
-                  output
-                  onChange={(val) =>
-                    setRotation(Array.isArray(val) ? val[0] : val)
-                  }
-                />
-                <RangeSlider
-                  label={`Dịch ngang (X): ${offsetXPercent}%`}
+                  label={`Dịch ngang (X): ${Math.round(selectedLayer.offsetX * 100)}%`}
                   min={-50}
                   max={50}
-                  value={offsetXPercent}
+                  value={Math.round(selectedLayer.offsetX * 100)}
                   output
-                  onChange={(val) =>
-                    setOffsetXPercent(Array.isArray(val) ? val[0] : val)
-                  }
+                  onChange={(val) => updateSelected({ offsetX: sliderValue(val) / 100 })}
+                />
+                <RangeSlider
+                  label={`Dịch dọc (Y): ${Math.round(selectedLayer.offsetY * 100)}%`}
+                  min={-50}
+                  max={50}
+                  value={Math.round(selectedLayer.offsetY * 100)}
+                  output
+                  onChange={(val) => updateSelected({ offsetY: sliderValue(val) / 100 })}
                 />
               </FormLayout.Group>
             </FormLayout>
+            </div>
           </Card>
         </Layout.Section>
 
@@ -1447,7 +1514,7 @@ export function UnifiedWatermarkStudio() {
                   <WatermarkPreview
                     imageUrl={activePreviewProduct?.imageUrl ?? null}
                     productTitle={activePreviewProduct?.title}
-                    style={currentWatermarkStyle}
+                    layers={layers}
                     showWatermark={previewWithWatermark}
                   />
                 </div>
@@ -1791,6 +1858,13 @@ export function UnifiedWatermarkStudio() {
         </Card.Section>
       </Card>
 
+      {/* Tự động đóng dấu theo rule (collection / loại sản phẩm / toàn shop) */}
+      <AutoWatermarkRules
+        layers={toPayload(layers)}
+        designError={designError}
+        productTypes={productTypes.data?.productTypes ?? []}
+      />
+
       {/* SECTION 3: TIẾN ĐỘ BATCH (Nếu có batch) */}
       {(batches.data?.batches ?? []).length > 0 && (
         <Card sectioned title="Tiến độ các Batch gần đây">
@@ -1854,15 +1928,4 @@ function jobStatusBadge(status: string) {
     default:
       return <Badge>{status}</Badge>;
   }
-}
-
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    throw new Error(body?.error ?? `HTTP ${response.status}`);
-  }
-  return (await response.json()) as T;
 }

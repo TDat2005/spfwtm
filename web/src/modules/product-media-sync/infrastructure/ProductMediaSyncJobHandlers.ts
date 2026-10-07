@@ -13,10 +13,12 @@ import {
   PRODUCT_MEDIA_RECONCILE_V1,
   assertJobVersion,
 } from "../../jobs/domain/JobDefinitions.ts";
+import { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
 import { BullMqJobQueue } from "../../jobs/infrastructure/BullMqJobQueue.ts";
 import { BullMqWorker } from "../../jobs/infrastructure/BullMqWorker.ts";
 import { ReceiveProductWebhook } from "../application/ReceiveProductWebhook.ts";
 import { ReconcileProductMedia } from "../application/ReconcileProductMedia.ts";
+import { BullMqAutoWatermarkTrigger } from "./BullMqAutoWatermarkTrigger.ts";
 import { PrismaWebhookInboxRepository } from "./PrismaWebhookInboxRepository.ts";
 import { ShopifyProductMediaGateway } from "./ShopifyProductMediaGateway.ts";
 
@@ -31,6 +33,7 @@ export class ProductMediaSyncJobHandlers implements OnModuleInit, OnApplicationB
     @Inject(PrismaWebhookInboxRepository)
     private readonly webhookInbox: PrismaWebhookInboxRepository,
     @Inject(ReceiveProductWebhook) private readonly receiveProductWebhook: ReceiveProductWebhook,
+    @Inject(EnqueueJob) private readonly enqueueJob: EnqueueJob,
   ) {}
 
   onModuleInit(): void {
@@ -75,6 +78,7 @@ export class ProductMediaSyncJobHandlers implements OnModuleInit, OnApplicationB
     const reconcile = new ReconcileProductMedia(
       this.webhookInbox,
       new ShopifyProductMediaGateway(this.shopify, session),
+      new BullMqAutoWatermarkTrigger(this.enqueueJob),
     );
     await reconcile.execute(webhookId);
   }

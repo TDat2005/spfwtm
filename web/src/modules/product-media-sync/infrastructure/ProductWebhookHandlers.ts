@@ -61,8 +61,11 @@ export function createProductWebhookHandlers(
                 data: {
                   uninstalledAt: new Date(),
                   catalogSyncStatus: "IDLE",
-                  autoWatermarkEnabled: false,
                 },
+              }),
+              prisma.autoWatermarkRule.updateMany({
+                where: { shopId: shop.id },
+                data: { enabled: false },
               }),
               prisma.watermarkJob.updateMany({
                 where: {

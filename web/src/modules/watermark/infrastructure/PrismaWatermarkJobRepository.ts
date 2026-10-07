@@ -1,6 +1,7 @@
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import type { WatermarkJobRepository } from "../application/WatermarkPorts.ts";
-import { WatermarkJob } from "../domain/WatermarkJob.ts";
+import { WatermarkJob, type WatermarkJobStatus } from "../domain/WatermarkJob.ts";
+import { readWatermarkDesign, saveWatermarkDesign } from "./PrismaWatermarkDesigns.ts";
 
 export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -15,39 +16,37 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
     });
     if (!product) throw new Error("Sản phẩm chưa được đồng bộ");
 
-    await this.prisma.watermarkJob.upsert({
+    const existing = await this.prisma.watermarkJob.findUnique({
       where: { id: job.id },
-      create: {
-        id: job.id,
-        shopId: product.shopId,
-        catalogProductId: product.id,
-        sourceImageUrl: job.sourceImageUrl,
-        watermarkType: job.watermarkType,
-        text: job.text,
-        logoUrl: job.logoUrl,
-        logoScale: job.logoScale,
-        position: job.position,
-        opacity: job.opacity,
-        layout: job.layout,
-        rotation: job.rotation,
-        offsetX: job.offsetX,
-        offsetY: job.offsetY,
-        fontFamily: job.fontFamily,
-        fontSize: job.fontSize,
-        textColor: job.textColor,
-        strokeColor: job.strokeColor,
-        strokeWidth: job.strokeWidth,
-        status: job.status,
-        resultMediaId: job.resultMediaId,
-        errorMessage: job.errorMessage,
-        createdAt: job.createdAt,
-      },
-      update: {
-        status: job.status,
-        resultMediaId: job.resultMediaId,
-        errorMessage: job.errorMessage,
-      },
+      select: { id: true },
     });
+    if (existing) {
+      // Design bất biến: sau khi tạo, job chỉ đổi trạng thái.
+      await this.prisma.watermarkJob.update({
+        where: { id: job.id },
+        data: {
+          status: job.status,
+          resultMediaId: job.resultMediaId,
+          errorMessage: job.errorMessage,
+        },
+      });
+    } else {
+      const designId = await saveWatermarkDesign(this.prisma, product.shopId, job.design);
+      await this.prisma.watermarkJob.create({
+        data: {
+          id: job.id,
+          shopId: product.shopId,
+          catalogProductId: product.id,
+          sourceImageUrl: job.sourceImageUrl,
+          designId,
+          publishOnComplete: job.publishOnComplete,
+          status: job.status,
+          resultMediaId: job.resultMediaId,
+          errorMessage: job.errorMessage,
+          createdAt: job.createdAt,
+        },
+      });
+    }
 
     if (job.status === "COMPLETED") {
       await this.prisma.catalogProduct.updateMany({
@@ -66,7 +65,7 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
   ): Promise<WatermarkJob | null> {
     const row = await this.prisma.watermarkJob.findFirst({
       where: { id, shop: { domain: shopDomain } },
-      include: { shop: true, product: true },
+      include: JOB_INCLUDE,
     });
     return row ? this.toDomain(row) : null;
   }
@@ -74,7 +73,7 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
   async listByShop(shopDomain: string): Promise<WatermarkJob[]> {
     const rows = await this.prisma.watermarkJob.findMany({
       where: { shop: { domain: shopDomain } },
-      include: { shop: true, product: true },
+      include: JOB_INCLUDE,
       orderBy: { createdAt: "desc" },
     });
     return rows.map((row) => this.toDomain(row));
@@ -83,64 +82,22 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
   private toDomain(row: {
     id: string;
     sourceImageUrl: string;
-    watermarkType: "TEXT" | "IMAGE";
-    text: string | null;
-    logoUrl: string | null;
-    logoScale: number;
-    position:
-      | "TOP_LEFT"
-      | "TOP_CENTER"
-      | "TOP_RIGHT"
-      | "MIDDLE_LEFT"
-      | "CENTER"
-      | "MIDDLE_RIGHT"
-      | "BOTTOM_LEFT"
-      | "BOTTOM_CENTER"
-      | "BOTTOM_RIGHT";
-    opacity: number;
-    layout: "SINGLE" | "TILED";
-    rotation: number;
-    offsetX: number;
-    offsetY: number;
-    fontFamily: string;
-    fontSize: number;
-    textColor: string;
-    strokeColor: string;
-    strokeWidth: number;
-    status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "CANCELLED";
+    publishOnComplete: boolean;
+    status: WatermarkJobStatus;
     resultMediaId: string | null;
     errorMessage: string | null;
     createdAt: Date;
     shop: { domain: string };
     product: { shopifyProductId: string };
+    design: { layers: string };
   }): WatermarkJob {
     return new WatermarkJob({
       id: row.id,
       shopDomain: row.shop.domain,
       productId: row.product.shopifyProductId,
       sourceImageUrl: row.sourceImageUrl,
-      configuration: {
-        type: row.watermarkType,
-        text: row.text,
-        logoUrl: row.logoUrl,
-        logoScale: row.logoScale,
-        position: row.position,
-        opacity: row.opacity,
-        layout: row.layout,
-        rotation: row.rotation,
-        offsetX: row.offsetX,
-        offsetY: row.offsetY,
-        fontFamily: row.fontFamily as
-          | "Arial"
-          | "Helvetica"
-          | "Georgia"
-          | "Times New Roman"
-          | "Courier New",
-        fontSize: row.fontSize,
-        textColor: row.textColor,
-        strokeColor: row.strokeColor,
-        strokeWidth: row.strokeWidth,
-      },
+      design: readWatermarkDesign(row.design),
+      publishOnComplete: row.publishOnComplete,
       status: row.status,
       resultMediaId: row.resultMediaId,
       errorMessage: row.errorMessage,
@@ -148,3 +105,9 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
     });
   }
 }
+
+const JOB_INCLUDE = {
+  shop: { select: { domain: true } },
+  product: { select: { shopifyProductId: true } },
+  design: { select: { layers: true } },
+} as const;

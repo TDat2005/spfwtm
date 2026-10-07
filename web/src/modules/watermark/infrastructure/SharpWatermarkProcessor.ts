@@ -1,10 +1,7 @@
-import sharp, { type Sharp } from "sharp";
+import sharp, { type OverlayOptions } from "sharp";
 import type { WatermarkConfiguration } from "../domain/WatermarkJob.ts";
 import type { WatermarkProcessor } from "../application/WatermarkPorts.ts";
-import {
-  overlayPlacements,
-  textOverlayMetrics,
-} from "../domain/WatermarkGeometry.ts";
+import { overlayPlacements, textOverlayMetrics } from "../domain/WatermarkGeometry.ts";
 
 interface PreparedOverlay {
   bytes: Buffer;
@@ -12,34 +9,55 @@ interface PreparedOverlay {
   height: number;
 }
 
+/**
+ * Mỗi job Sharp tự dùng thread pool của libvips (mặc định = số nhân CPU). Khi
+ * worker chạy nhiều job song song nên giới hạn lại để tổng số thread
+ * (concurrency của lane x SHARP_CONCURRENCY) không vượt quá số nhân CPU.
+ */
+export function configureSharpConcurrency(value: string | undefined): void {
+  if (value === undefined || value.trim() === "") return;
+  const threads = Number(value);
+  if (!Number.isInteger(threads) || threads <= 0) {
+    throw new Error("SHARP_CONCURRENCY phải là số nguyên lớn hơn 0");
+  }
+  sharp.concurrency(threads);
+}
+
 export class SharpWatermarkProcessor implements WatermarkProcessor {
-  async applyText(input: Parameters<WatermarkProcessor["applyText"]>[0]) {
-    const configuration = input.configuration;
-    if (configuration.type !== "TEXT" || !configuration.text) {
-      throw new Error("Cấu hình watermark chữ không hợp lệ");
-    }
-
+  async render(input: Parameters<WatermarkProcessor["render"]>[0]) {
     const image = sharp(input.source, { failOn: "error" }).rotate();
     const metadata = await image.metadata();
     const width = metadata.width ?? 1200;
     const height = metadata.height ?? 1200;
-    const overlay = await prepareTextOverlay(configuration, width);
-    return render(image, width, height, overlay, configuration);
-  }
 
-  async applyImage(input: Parameters<WatermarkProcessor["applyImage"]>[0]) {
-    const configuration = input.configuration;
-    if (configuration.type !== "IMAGE") {
-      throw new Error("Cấu hình watermark logo không hợp lệ");
+    // Mọi lớp được ghép trong một lần composite: ảnh chỉ decode/encode một lần
+    // dù có 7 lớp. Thứ tự mảng = thứ tự chồng lớp (lớp đầu nằm dưới cùng).
+    const composites: OverlayOptions[] = [];
+    for (const [index, layer] of input.design.activeLayers.entries()) {
+      const overlay = await prepareLayerOverlay(layer, input.logos, width, index);
+      for (const { left, top } of overlayPlacements(layer.layout, width, height, overlay, layer)) {
+        composites.push({ input: overlay.bytes, left, top });
+      }
     }
 
-    const image = sharp(input.source, { failOn: "error" }).rotate();
-    const metadata = await image.metadata();
-    const width = metadata.width ?? 1200;
-    const height = metadata.height ?? 1200;
-    const overlay = await prepareLogoOverlay(input.logo, configuration, width);
-    return render(image, width, height, overlay, configuration);
+    const bytes = await image.composite(composites).webp({ quality: 90 }).toBuffer();
+    return { bytes, mimeType: "image/webp" };
   }
+}
+
+async function prepareLayerOverlay(
+  layer: WatermarkConfiguration,
+  logos: ReadonlyMap<string, Buffer>,
+  imageWidth: number,
+  index: number
+): Promise<PreparedOverlay> {
+  if (layer.type === "TEXT") {
+    if (!layer.text) throw new Error(`Lớp ${index + 1}: thiếu nội dung chữ`);
+    return prepareTextOverlay(layer, imageWidth);
+  }
+  const logo = layer.logoUrl ? logos.get(layer.logoUrl) : undefined;
+  if (!logo) throw new Error(`Lớp ${index + 1}: chưa tải được logo`);
+  return prepareLogoOverlay(logo, layer, imageWidth);
 }
 
 async function prepareTextOverlay(
@@ -101,33 +119,6 @@ async function rotateOverlay(
     width: result.info.width,
     height: result.info.height,
   };
-}
-
-async function render(
-  image: Sharp,
-  imageWidth: number,
-  imageHeight: number,
-  overlay: PreparedOverlay,
-  configuration: WatermarkConfiguration
-) {
-  const positions = overlayPlacements(
-    configuration.layout,
-    imageWidth,
-    imageHeight,
-    overlay,
-    configuration
-  );
-  const bytes = await image
-    .composite(
-      positions.map(({ left, top }) => ({
-        input: overlay.bytes,
-        left,
-        top,
-      }))
-    )
-    .webp({ quality: 90 })
-    .toBuffer();
-  return { bytes, mimeType: "image/webp" };
 }
 
 function escapeXml(value: string): string {

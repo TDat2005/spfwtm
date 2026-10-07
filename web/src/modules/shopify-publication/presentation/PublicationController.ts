@@ -7,6 +7,8 @@ import type { PublishedMedia } from "../domain/PublishedMedia.ts";
 import { PublicationUseCaseFactory } from "../infrastructure/PublicationUseCaseFactory.ts";
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import { PRISMA_CLIENT, SHOPIFY, type ShopifyApp } from "../../../shared/nest/tokens.ts";
+import { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
+import { PUBLICATION_PUBLISH_V1 } from "../../jobs/domain/JobDefinitions.ts";
 
 @Controller("api/publications")
 export class PublicationController {
@@ -15,6 +17,7 @@ export class PublicationController {
     @Inject(PublicationUseCaseFactory) private readonly useCases: PublicationUseCaseFactory,
     @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
     @Inject(SHOPIFY) private readonly shopify: ShopifyApp,
+    @Inject(EnqueueJob) private readonly enqueueJob: EnqueueJob,
   ) {}
 
   @Get()
@@ -62,39 +65,24 @@ export class PublicationController {
           batchId,
           shopId: shop.id,
           status: "COMPLETED",
+          publishedMedia: null,
         },
         select: { id: true },
       });
 
-      let publishedCount = 0;
-      let failedCount = 0;
-      const errors: Array<{ jobId: string; error: string }> = [];
-
-      const publisher = this.useCases.publishWatermarkedImage(session);
-
-      for (const job of jobs) {
-        try {
-          await publisher.execute({
+      await this.enqueueJob.executeMany(
+        jobs.map((job) => ({
+          ...PUBLICATION_PUBLISH_V1,
+          jobId: `publish_${job.id}`,
+          payload: {
             watermarkJobId: job.id,
             shopDomain: session.shop,
-          });
-          publishedCount++;
-        } catch (err: unknown) {
-          failedCount++;
-          errors.push({
-            jobId: job.id,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
+          },
+          maxAttempts: 5,
+        })),
+      );
 
-      return {
-        success: true,
-        totalCompleted: jobs.length,
-        publishedCount,
-        failedCount,
-        errors,
-      };
+      return { success: true, queuedCount: jobs.length };
     } catch (error) {
       throw toHttpException("Publication", error);
     }

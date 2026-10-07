@@ -23,7 +23,11 @@ const REDIS_RUNTIME_CONFIG = Symbol("REDIS_RUNTIME_CONFIG");
       inject: [REDIS_RUNTIME_CONFIG],
       useFactory: (config: RedisRuntimeConfig) =>
         new BullMqJobQueue({
-          queueName: config.queueName,
+          queueNames: {
+            interactive: config.lanes.interactive.queueName,
+            bulk: config.lanes.bulk.queueName,
+            system: config.lanes.system.queueName,
+          },
           connection: config.producerConnection,
           prefix: config.prefix,
         }),
@@ -33,9 +37,10 @@ const REDIS_RUNTIME_CONFIG = Symbol("REDIS_RUNTIME_CONFIG");
       inject: [REDIS_RUNTIME_CONFIG],
       useFactory: (config: RedisRuntimeConfig) =>
         new BullMqWorker({
-          queueName: config.queueName,
+          lanes: config.workerEnabled
+            ? config.workerLanes.map((lane) => config.lanes[lane])
+            : [],
           connection: config.workerConnection,
-          concurrency: config.concurrency,
           prefix: config.prefix,
         }),
     },

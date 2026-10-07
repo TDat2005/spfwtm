@@ -1,29 +1,27 @@
-import type { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
-import { WATERMARK_PROCESS_V1 } from "../../jobs/domain/JobDefinitions.ts";
 import {
-  WatermarkConfiguration,
-  type WatermarkConfigurationProps,
-} from "../domain/WatermarkConfiguration.ts";
+  WatermarkDesign,
+  type WatermarkLayerProps,
+} from "../domain/WatermarkDesign.ts";
 import type {
   CreatedWatermarkBatch,
   WatermarkBatchRepository,
   WatermarkBatchSelection,
 } from "./BulkWatermarkPorts.ts";
+import type { DispatchWatermarkBatch } from "./DispatchWatermarkBatch.ts";
 
 const MAX_SELECTED_PRODUCTS = 1_000;
 const MAX_PRODUCT_TYPE_JOBS = 5_000;
-const ENQUEUE_CHUNK_SIZE = 1_000;
 
 export interface CreateWatermarkBatchInput {
   shopDomain: string;
   selection: WatermarkBatchSelection;
-  configuration: WatermarkConfigurationProps;
+  layers: ReadonlyArray<WatermarkLayerProps>;
 }
 
 export class CreateWatermarkBatch {
   constructor(
     private readonly repository: WatermarkBatchRepository,
-    private readonly enqueueJob: EnqueueJob
+    private readonly dispatcher: Pick<DispatchWatermarkBatch, "execute">
   ) {}
 
   async execute(
@@ -41,21 +39,12 @@ export class CreateWatermarkBatch {
         selection.kind === "PRODUCT_IDS"
           ? MAX_SELECTED_PRODUCTS
           : MAX_PRODUCT_TYPE_JOBS,
-      configuration: new WatermarkConfiguration(input.configuration),
+      design: new WatermarkDesign(input.layers),
     });
 
-    for (let i = 0; i < batch.jobs.length; i += ENQUEUE_CHUNK_SIZE) {
-      await this.enqueueJob.executeMany(
-        batch.jobs.slice(i, i + ENQUEUE_CHUNK_SIZE).map((job) => ({
-          ...WATERMARK_PROCESS_V1,
-          payload: {
-            jobId: job.id,
-            shopDomain: input.shopDomain,
-            batchId: batch.id,
-          },
-        }))
-      );
-    }
+    // Batch nhỏ vào lane interactive ngay; batch lớn chỉ đưa cửa sổ đầu tiên,
+    // phần còn lại được nhỏ giọt khi từng job hoàn thành.
+    await this.dispatcher.execute(batch.id);
     return batch;
   }
 }

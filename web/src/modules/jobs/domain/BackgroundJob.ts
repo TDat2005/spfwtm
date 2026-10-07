@@ -1,3 +1,7 @@
+import type { JobLane } from "./JobDefinitions.ts";
+
+const MAX_PRIORITY = 2_097_151;
+
 export type BackgroundJobStatus =
   | "PENDING"
   | "PROCESSING"
@@ -10,6 +14,8 @@ export interface BackgroundJobProps {
   payload: Record<string, unknown>;
   payloadVersion: number;
   processorVersion: number;
+  lane: JobLane;
+  priority: number;
   delayMs?: number;
   status?: BackgroundJobStatus;
   attempts?: number;
@@ -26,6 +32,8 @@ export class BackgroundJob {
   readonly payload: Record<string, unknown>;
   readonly payloadVersion: number;
   readonly processorVersion: number;
+  readonly lane: JobLane;
+  readonly priority: number;
   readonly delayMs: number;
   readonly maxAttempts: number;
   readonly removeOnComplete?: boolean;
@@ -44,12 +52,17 @@ export class BackgroundJob {
     if (!Number.isInteger(props.processorVersion) || props.processorVersion < 1) {
       throw new Error("Processor version phải là số nguyên dương");
     }
+    if (!Number.isInteger(props.priority) || props.priority < 1 || props.priority > MAX_PRIORITY) {
+      throw new Error(`Priority phải là số nguyên từ 1 đến ${MAX_PRIORITY}`);
+    }
 
     this.id = props.id;
     this.jobName = props.jobName;
     this.payload = props.payload;
     this.payloadVersion = props.payloadVersion;
     this.processorVersion = props.processorVersion;
+    this.lane = props.lane;
+    this.priority = props.priority;
     this.delayMs = Math.max(0, props.delayMs ?? 0);
     this.currentStatus = props.status ?? "PENDING";
     this.currentAttempts = props.attempts ?? 0;

@@ -1,9 +1,19 @@
 import type { ConnectionOptions } from "bullmq";
+import { JOB_LANES, type JobLane } from "../domain/JobDefinitions.ts";
+
+export interface LaneRuntimeConfig {
+  lane: JobLane;
+  queueName: string;
+  concurrency: number;
+}
 
 export interface RedisRuntimeConfig {
-  queueName: string;
   prefix?: string;
-  concurrency: number;
+  lanes: Record<JobLane, LaneRuntimeConfig>;
+  /** Tiến trình này có chạy worker không (web production nên đặt WORKER_ENABLED=false). */
+  workerEnabled: boolean;
+  /** Các lane mà worker của tiến trình này xử lý. */
+  workerLanes: JobLane[];
   producerConnection: ConnectionOptions;
   workerConnection: ConnectionOptions;
 }
@@ -17,18 +27,33 @@ export function redisRuntimeConfigFromEnv(
     ? connectionFromUrl(environment.REDIS_URL.trim())
     : connectionFromFields(environment);
 
-  const queueName = environment.BULLMQ_QUEUE_NAME?.trim() || "watermark-processing";
+  const baseQueueName =
+    environment.BULLMQ_QUEUE_NAME?.trim() || "watermark-processing";
   const prefix = environment.BULLMQ_PREFIX?.trim() || undefined;
-  const concurrency = positiveInteger(
+  const defaultConcurrency = positiveInteger(
     environment.BULLMQ_WORKER_CONCURRENCY,
     2,
     "BULLMQ_WORKER_CONCURRENCY"
   );
+  const lanes = Object.fromEntries(
+    JOB_LANES.map((lane) => {
+      const envName = `BULLMQ_${lane.toUpperCase()}_CONCURRENCY`;
+      return [
+        lane,
+        {
+          lane,
+          queueName: laneQueueName(baseQueueName, lane),
+          concurrency: positiveInteger(environment[envName], defaultConcurrency, envName),
+        },
+      ];
+    })
+  ) as Record<JobLane, LaneRuntimeConfig>;
 
   return {
-    queueName,
     prefix,
-    concurrency,
+    lanes,
+    workerEnabled: booleanFlag(environment.WORKER_ENABLED, true, "WORKER_ENABLED"),
+    workerLanes: parseLanes(environment.WORKER_LANES),
     producerConnection: {
       ...baseConnection,
       maxRetriesPerRequest: 1,
@@ -38,6 +63,40 @@ export function redisRuntimeConfigFromEnv(
       maxRetriesPerRequest: null,
     },
   };
+}
+
+/**
+ * Lane system giữ đúng tên queue cũ để worker tiếp tục xử lý những job đã nằm
+ * sẵn trong Redis từ trước khi tách lane (worker của mọi lane đều biết mọi handler).
+ */
+function laneQueueName(baseQueueName: string, lane: JobLane): string {
+  return lane === "system" ? baseQueueName : `${baseQueueName}-${lane}`;
+}
+
+function parseLanes(value: string | undefined): JobLane[] {
+  if (value === undefined || value.trim() === "") return [...JOB_LANES];
+  const lanes = value
+    .split(",")
+    .map((lane) => lane.trim())
+    .filter(Boolean);
+  for (const lane of lanes) {
+    if (!(JOB_LANES as readonly string[]).includes(lane)) {
+      throw new Error(`WORKER_LANES chứa lane không hợp lệ: ${lane}`);
+    }
+  }
+  return [...new Set(lanes)] as JobLane[];
+}
+
+function booleanFlag(
+  value: string | undefined,
+  fallback: boolean,
+  name: string
+): boolean {
+  if (value === undefined || value.trim() === "") return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes"].includes(normalized)) return true;
+  if (["0", "false", "no"].includes(normalized)) return false;
+  throw new Error(`${name} phải là true hoặc false`);
 }
 
 function connectionFromFields(environment: Environment): ConnectionOptions {

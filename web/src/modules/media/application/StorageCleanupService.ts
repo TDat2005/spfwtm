@@ -52,10 +52,11 @@ export class StorageCleanupService {
     for (const asset of assets) {
       try {
         const deleted = await this.mediaStorage.delete(asset.storageKey);
-        if (deleted) {
-          deletedAssetsCount++;
-          freedBytes += asset.byteSize;
-        }
+        // File đã mất (ENOENT) thì row cũng không còn giá trị, xóa luôn để
+        // không còn URL trỏ tới file không tồn tại.
+        await this.prisma.mediaAsset.delete({ where: { id: asset.id } });
+        deletedAssetsCount++;
+        if (deleted) freedBytes += asset.byteSize;
       } catch {
         // Continue cleaning other assets without aborting
       }

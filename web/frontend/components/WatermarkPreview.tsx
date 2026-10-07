@@ -1,5 +1,5 @@
 import { Banner, Spinner, Stack, Text } from "@shopify/polaris";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   logoOverlaySize,
   overlayPlacements,
@@ -26,10 +26,33 @@ export interface WatermarkStyle {
   strokeWidth: number;
 }
 
+/** Một lớp watermark, cùng dạng với SerializedWatermarkLayer của backend. */
+export interface PreviewLayer {
+  enabled?: boolean;
+  type: "TEXT" | "IMAGE";
+  text: string | null;
+  logoUrl: string | null;
+  position: string;
+  opacity: number;
+  layout: "SINGLE" | "TILED";
+  logoScale: number;
+  rotation: number;
+  offsetX: number;
+  offsetY: number;
+  fontFamily: string;
+  fontSize: number;
+  textColor: string;
+  strokeColor: string;
+  strokeWidth: number;
+}
+
 interface WatermarkPreviewProps {
   imageUrl: string | null;
   productTitle?: string;
-  style: WatermarkStyle;
+  /** Các lớp theo thứ tự từ dưới lên. */
+  layers?: PreviewLayer[];
+  /** Cách dùng cũ: một cấu hình. */
+  style?: WatermarkStyle;
   showWatermark?: boolean;
 }
 
@@ -40,14 +63,25 @@ type LoadedImage =
 export function WatermarkPreview({
   imageUrl,
   productTitle,
+  layers,
   style,
   showWatermark = true,
 }: WatermarkPreviewProps) {
-  const image = useImageSize(imageUrl);
-  const debouncedLogoUrl = useDebounced(style.logoUrl.trim(), 400);
-  const logo = useImageSize(
-    style.watermarkType === "IMAGE" && debouncedLogoUrl ? debouncedLogoUrl : null
+  const activeLayers = useMemo(
+    () =>
+      (layers ?? (style ? [{ ...style, type: style.watermarkType }] : [])).filter(
+        (layer) => layer.enabled !== false
+      ),
+    [layers, style]
   );
+  const image = useImageSize(imageUrl);
+  const logoUrlsKey = activeLayers
+    .flatMap((layer) =>
+      layer.type === "IMAGE" && layer.logoUrl?.trim() ? [layer.logoUrl.trim()] : []
+    )
+    .join("\n");
+  const debouncedLogoUrlsKey = useDebounced(logoUrlsKey, 400);
+  const logos = useImageSizes(debouncedLogoUrlsKey);
 
   if (!imageUrl) {
     return (
@@ -103,9 +137,18 @@ export function WatermarkPreview({
   }
 
   const { width, height } = image.size;
-  const overlay = showWatermark
-    ? buildOverlay(style, width, logo, debouncedLogoUrl)
-    : null;
+  const overlays = showWatermark
+    ? activeLayers.flatMap((layer, index) => {
+        const overlay = buildOverlay(layer, width, logos);
+        return overlay ? [{ layer, overlay, index }] : [];
+      })
+    : [];
+  const failedLogo = activeLayers.some(
+    (layer) =>
+      layer.type === "IMAGE" &&
+      layer.logoUrl &&
+      logos.get(layer.logoUrl.trim())?.status === "error"
+  );
 
   return (
     <Stack vertical spacing="tight">
@@ -141,11 +184,11 @@ export function WatermarkPreview({
           aria-label={`Xem trước watermark trên ${productTitle ?? "ảnh sản phẩm"}`}
         >
           <image href={imageUrl} width={width} height={height} />
-          {overlay &&
-            overlayPlacements(style.layout, width, height, overlay.bounds, style).map(
+          {overlays.map(({ layer, overlay, index }) =>
+            overlayPlacements(layer.layout, width, height, overlay.bounds, layer).map(
               ({ left, top }) => (
                 <svg
-                  key={`${left}-${top}`}
+                  key={`${index}-${left}-${top}`}
                   x={left}
                   y={top}
                   width={overlay.bounds.width}
@@ -153,34 +196,34 @@ export function WatermarkPreview({
                   overflow="hidden"
                 >
                   <g
-                    transform={`translate(${overlay.bounds.width / 2} ${overlay.bounds.height / 2}) rotate(${style.rotation}) translate(${-overlay.content.width / 2} ${-overlay.content.height / 2})`}
+                    transform={`translate(${overlay.bounds.width / 2} ${overlay.bounds.height / 2}) rotate(${layer.rotation}) translate(${-overlay.content.width / 2} ${-overlay.content.height / 2})`}
                   >
                     {overlay.render()}
                   </g>
                 </svg>
               )
-            )}
+            )
+          )}
         </svg>
       </div>
       <Text as="p" variant="bodySm" color="subdued">
         {productTitle ? `${productTitle} · ` : ""}
         {width}×{height}px
       </Text>
-      {style.watermarkType === "IMAGE" && logo.status === "error" && (
-        <Banner status="warning" title="Không tải được logo từ URL này" />
+      {failedLogo && (
+        <Banner status="warning" title="Không tải được logo của một lớp" />
       )}
     </Stack>
   );
 }
 
 function buildOverlay(
-  style: WatermarkStyle,
+  style: PreviewLayer,
   imageWidth: number,
-  logo: LoadedImage,
-  logoUrl: string
+  logos: ReadonlyMap<string, LoadedImage>
 ) {
-  if (style.watermarkType === "TEXT") {
-    const text = style.text.trim() ? style.text : "";
+  if (style.type === "TEXT") {
+    const text = style.text?.trim() ? style.text : "";
     if (!text) return null;
     const metrics = textOverlayMetrics(
       text,
@@ -214,7 +257,9 @@ function buildOverlay(
     };
   }
 
-  if (logo.status !== "loaded") return null;
+  const logoUrl = style.logoUrl?.trim() ?? "";
+  const logo = logos.get(logoUrl);
+  if (!logo || logo.status !== "loaded") return null;
   const size = logoOverlaySize(logo.size, style.logoScale, imageWidth);
   return {
     content: size,
@@ -263,6 +308,45 @@ function useImageSize(url: string | null): LoadedImage {
   }, [url]);
 
   return state;
+}
+
+/** Kích thước của nhiều ảnh (logo), key là các URL nối bằng xuống dòng. */
+function useImageSizes(urlsKey: string): ReadonlyMap<string, LoadedImage> {
+  const [sizes, setSizes] = useState<ReadonlyMap<string, LoadedImage>>(new Map());
+
+  useEffect(() => {
+    const urls = [...new Set(urlsKey.split("\n").filter(Boolean))];
+    let active = true;
+    setSizes(new Map(urls.map((url) => [url, { status: "loading" as const }])));
+    const elements = urls.map((url) => {
+      const element = new Image();
+      const update = (state: LoadedImage) => {
+        if (!active) return;
+        setSizes((current) => new Map(current).set(url, state));
+      };
+      element.onload = () =>
+        update(
+          element.naturalWidth > 0
+            ? {
+                status: "loaded",
+                size: { width: element.naturalWidth, height: element.naturalHeight },
+              }
+            : { status: "error" }
+        );
+      element.onerror = () => update({ status: "error" });
+      element.src = url;
+      return element;
+    });
+    return () => {
+      active = false;
+      for (const element of elements) {
+        element.onload = null;
+        element.onerror = null;
+      }
+    };
+  }, [urlsKey]);
+
+  return sizes;
 }
 
 function useDebounced<T>(value: T, delayMs: number): T {

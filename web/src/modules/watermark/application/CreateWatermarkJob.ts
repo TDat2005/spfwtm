@@ -1,10 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  WatermarkJob,
-  type WatermarkFontFamily,
-  type WatermarkLayout,
-  type WatermarkPosition,
-} from "../domain/WatermarkJob.ts";
+import { WatermarkJob, type WatermarkLayerProps } from "../domain/WatermarkJob.ts";
 import type {
   ProductImageReader,
   WatermarkJobRepository,
@@ -13,21 +8,7 @@ import type {
 export interface CreateWatermarkJobInput {
   shopDomain: string;
   productId: string;
-  watermarkType?: "TEXT" | "IMAGE";
-  text?: string | null;
-  logoUrl?: string | null;
-  logoScale?: number;
-  position: WatermarkPosition;
-  opacity: number;
-  layout?: WatermarkLayout;
-  rotation?: number;
-  offsetX?: number;
-  offsetY?: number;
-  fontFamily?: WatermarkFontFamily;
-  fontSize?: number;
-  textColor?: string;
-  strokeColor?: string;
-  strokeWidth?: number;
+  layers: ReadonlyArray<WatermarkLayerProps>;
 }
 
 export class CreateWatermarkJob {
@@ -49,23 +30,7 @@ export class CreateWatermarkJob {
       shopDomain: input.shopDomain,
       productId: input.productId,
       sourceImageUrl: imageUrl,
-      configuration: {
-        type: input.watermarkType,
-        text: input.text,
-        logoUrl: input.logoUrl,
-        logoScale: input.logoScale,
-        position: input.position,
-        opacity: input.opacity,
-        layout: input.layout,
-        rotation: input.rotation,
-        offsetX: input.offsetX,
-        offsetY: input.offsetY,
-        fontFamily: input.fontFamily,
-        fontSize: input.fontSize,
-        textColor: input.textColor,
-        strokeColor: input.strokeColor,
-        strokeWidth: input.strokeWidth,
-      },
+      design: input.layers,
     });
     await this.repository.save(job);
     return job;

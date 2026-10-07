@@ -1,39 +1,55 @@
 import { Queue, type ConnectionOptions } from "bullmq";
 import type { JobPublisher } from "../application/JobQueue.ts";
 import type { BackgroundJob } from "../domain/BackgroundJob.ts";
-import type { JobDefinition } from "../domain/JobDefinitions.ts";
+import {
+  JOB_LANES,
+  type JobDefinition,
+  type JobLane,
+} from "../domain/JobDefinitions.ts";
 
 interface BullMqJobQueueOptions {
-  queueName: string;
+  queueNames: Record<JobLane, string>;
   connection: ConnectionOptions;
   prefix?: string;
 }
 
 export class BullMqJobQueue implements JobPublisher {
-  private readonly queue: Queue<Record<string, unknown>>;
+  private readonly queues: Map<JobLane, Queue<Record<string, unknown>>>;
 
   constructor(options: BullMqJobQueueOptions) {
-    this.queue = new Queue(options.queueName, {
-      connection: options.connection,
-      prefix: options.prefix,
-    });
-    this.queue.on("error", (error) => {
-      console.error("[BullMQ] Lỗi kết nối producer:", error.message);
-    });
+    this.queues = new Map(
+      JOB_LANES.map((lane) => {
+        const queue = new Queue<Record<string, unknown>>(options.queueNames[lane], {
+          connection: options.connection,
+          prefix: options.prefix,
+        });
+        queue.on("error", (error) => {
+          console.error(`[BullMQ:${lane}] Lỗi kết nối producer:`, error.message);
+        });
+        return [lane, queue];
+      })
+    );
   }
 
   async enqueue(job: BackgroundJob): Promise<void> {
     const entry = toBullMqEntry(job);
-    await this.queue.add(entry.name, entry.data, entry.opts);
+    await this.queue(job.lane).add(entry.name, entry.data, entry.opts);
   }
 
   async enqueueMany(jobs: BackgroundJob[]): Promise<void> {
-    if (jobs.length === 0) return;
-    await this.queue.addBulk(jobs.map(toBullMqEntry));
+    const byLane = new Map<JobLane, BackgroundJob[]>();
+    for (const job of jobs) {
+      const laneJobs = byLane.get(job.lane) ?? [];
+      laneJobs.push(job);
+      byLane.set(job.lane, laneJobs);
+    }
+    for (const [lane, laneJobs] of byLane) {
+      await this.queue(lane).addBulk(laneJobs.map(toBullMqEntry));
+    }
   }
 
   async close(): Promise<void> {
-    await this.queue.close();
+    await Promise.all([...this.queues.values()].map((queue) => queue.close()));
   }
 
   async upsertDailyJob(
@@ -41,9 +57,23 @@ export class BullMqJobQueue implements JobPublisher {
     pattern: string,
     timezone: string
   ): Promise<void> {
-    await this.queue.upsertJobScheduler(
+    await this.upsertScheduler(definition, { pattern, tz: timezone });
+  }
+
+  async upsertRepeatingJob(
+    definition: JobDefinition,
+    everyMs: number
+  ): Promise<void> {
+    await this.upsertScheduler(definition, { every: everyMs });
+  }
+
+  private async upsertScheduler(
+    definition: JobDefinition,
+    repeat: { pattern: string; tz: string } | { every: number }
+  ): Promise<void> {
+    await this.queue(definition.lane).upsertJobScheduler(
       definition.jobName,
-      { pattern, tz: timezone },
+      repeat,
       {
         name: definition.jobName,
         data: {
@@ -51,6 +81,7 @@ export class BullMqJobQueue implements JobPublisher {
           processorVersion: definition.processorVersion,
         },
         opts: {
+          priority: definition.priority,
           attempts: 3,
           backoff: { type: "exponential", delay: 5_000 },
           removeOnComplete: { age: 7 * 24 * 60 * 60, count: 30 },
@@ -58,6 +89,12 @@ export class BullMqJobQueue implements JobPublisher {
         },
       }
     );
+  }
+
+  private queue(lane: JobLane): Queue<Record<string, unknown>> {
+    const queue = this.queues.get(lane);
+    if (!queue) throw new Error(`Không có queue cho lane ${lane}`);
+    return queue;
   }
 }
 
@@ -71,6 +108,7 @@ function toBullMqEntry(job: BackgroundJob) {
     },
     opts: {
       jobId: job.id,
+      priority: job.priority,
       delay: job.delayMs,
       attempts: job.maxAttempts,
       backoff: {

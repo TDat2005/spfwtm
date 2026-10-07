@@ -13,5 +13,19 @@ describe("versioned background jobs", () => {
     expect(job.jobName).toBe("WATERMARK_PROCESS_V1");
     expect(job.payloadVersion).toBe(1);
     expect(job.processorVersion).toBe(1);
+    expect(job.lane).toBe("interactive");
+    expect(job.priority).toBe(1);
+  });
+
+  it("từ chối priority 0 vì BullMQ sẽ cho job đó chạy trước mọi job khác", () => {
+    expect(
+      () =>
+        new BackgroundJob({
+          id: "job-1",
+          ...WATERMARK_PROCESS_V1,
+          priority: 0,
+          payload: {},
+        })
+    ).toThrow("Priority phải là số nguyên");
   });
 });

@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import type { PrismaClient } from "../../generated/prisma/client.ts";
 import { PRISMA_CLIENT, SHOPIFY, type ShopifyApp } from "../../shared/nest/tokens.ts";
+import { JobsModule } from "../jobs/JobsModule.ts";
 import type { MediaStorage } from "../media/application/MediaPorts.ts";
 import { MEDIA_STORAGE, MediaModule } from "../media/MediaModule.ts";
 import { PrismaPublicationAttemptRepository } from "../product-media-sync/infrastructure/PrismaPublicationAttemptRepository.ts";
@@ -9,13 +10,14 @@ import { ListPublishedMedia } from "./application/ListPublishedMedia.ts";
 import type { PublishedMediaRepository } from "./application/PublishedMediaRepository.ts";
 import { PrismaPublishedMediaRepository } from "./infrastructure/PrismaPublishedMediaRepository.ts";
 import { PrismaWatermarkResultReader } from "./infrastructure/PrismaWatermarkResultReader.ts";
+import { PublicationJobHandlers } from "./infrastructure/PublicationJobHandlers.ts";
 import { PublicationUseCaseFactory } from "./infrastructure/PublicationUseCaseFactory.ts";
 import { PublicationController } from "./presentation/PublicationController.ts";
 
 const PUBLISHED_MEDIA_REPOSITORY = Symbol("PUBLISHED_MEDIA_REPOSITORY");
 
 @Module({
-  imports: [MediaModule, ProductMediaSyncModule],
+  imports: [JobsModule, MediaModule, ProductMediaSyncModule],
   controllers: [PublicationController],
   providers: [
     {
@@ -51,6 +53,7 @@ const PUBLISHED_MEDIA_REPOSITORY = Symbol("PUBLISHED_MEDIA_REPOSITORY");
           publicationAttempts,
         ),
     },
+    PublicationJobHandlers,
   ],
 })
 export class PublicationModule {}
