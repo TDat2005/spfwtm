@@ -1,5 +1,8 @@
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
-import type { WatermarkJobRepository } from "../application/WatermarkPorts.ts";
+import type {
+  WatermarkJobHistoryItem,
+  WatermarkJobRepository,
+} from "../application/WatermarkPorts.ts";
 import { WatermarkJob, type WatermarkJobStatus } from "../domain/WatermarkJob.ts";
 import { readWatermarkDesign, saveWatermarkDesign } from "./PrismaWatermarkDesigns.ts";
 
@@ -70,13 +73,33 @@ export class PrismaWatermarkJobRepository implements WatermarkJobRepository {
     return row ? this.toDomain(row) : null;
   }
 
-  async listByShop(shopDomain: string): Promise<WatermarkJob[]> {
-    const rows = await this.prisma.watermarkJob.findMany({
-      where: { shop: { domain: shopDomain } },
-      include: JOB_INCLUDE,
-      orderBy: { createdAt: "desc" },
-    });
-    return rows.map((row) => this.toDomain(row));
+  async listPageByShop(
+    shopDomain: string,
+    range: { offset: number; limit: number }
+  ): Promise<{ items: WatermarkJobHistoryItem[]; total: number }> {
+    const where = { shop: { domain: shopDomain } };
+    const [rows, total] = await Promise.all([
+      this.prisma.watermarkJob.findMany({
+        where,
+        include: {
+          ...JOB_INCLUDE,
+          product: { select: { shopifyProductId: true, title: true } },
+          publishedMedia: { select: { id: true } },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip: range.offset,
+        take: range.limit,
+      }),
+      this.prisma.watermarkJob.count({ where }),
+    ]);
+    return {
+      items: rows.map((row) => ({
+        job: this.toDomain(row),
+        productTitle: row.product.title,
+        published: row.publishedMedia !== null,
+      })),
+      total,
+    };
   }
 
   private toDomain(row: {

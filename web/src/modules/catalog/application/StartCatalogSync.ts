@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type {
-  CatalogSyncQueue,
-  CatalogSyncRepository,
-  CatalogSyncState,
+import {
+  CATALOG_SYNC_STALE_MS,
+  type CatalogSyncQueue,
+  type CatalogSyncRepository,
+  type CatalogSyncState,
 } from "./CatalogSyncPorts.ts";
-
-const STALE_SYNC_MS = 15 * 60 * 1000;
 
 export class StartCatalogSync {
   constructor(
@@ -22,7 +21,7 @@ export class StartCatalogSync {
     const started = await this.repository.tryStart(
       shopDomain,
       syncId,
-      new Date(Date.now() - STALE_SYNC_MS),
+      new Date(Date.now() - CATALOG_SYNC_STALE_MS),
     );
 
     if (!started) return this.repository.getState(shopDomain);

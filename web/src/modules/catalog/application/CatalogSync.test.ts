@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { Product } from "../domain/Product.ts";
-import type {
-  CatalogSyncPageInput,
-  CatalogSyncQueue,
-  CatalogSyncRepository,
-  CatalogSyncState,
+import {
+  CATALOG_SYNC_STALE_MS,
+  type CatalogSyncPageInput,
+  type CatalogSyncQueue,
+  type CatalogSyncRepository,
+  type CatalogSyncState,
 } from "./CatalogSyncPorts.ts";
+import { GetCatalogSyncStatus, STALE_SYNC_ERROR } from "./GetCatalogSyncStatus.ts";
 import type { ProductGatewayFactory, ProductPage } from "./ProductGateway.ts";
 import type { ProductRepository } from "./ProductRepository.ts";
 import { StartCatalogSync } from "./StartCatalogSync.ts";
@@ -24,6 +26,7 @@ function fakeSyncs(overrides: Partial<CatalogSyncRepository> = {}): CatalogSyncR
     syncedCount: 0,
     error: null,
     startedAt: null,
+    heartbeatAt: null,
     finishedAt: null,
   };
   return {
@@ -84,6 +87,44 @@ describe("StartCatalogSync", () => {
 
     await expect(new StartCatalogSync(syncs, queue).execute(SHOP)).rejects.toThrow("Redis down");
     expect(syncs.fail).toHaveBeenCalled();
+  });
+});
+
+describe("GetCatalogSyncStatus", () => {
+  function runningSince(heartbeatAt: Date): CatalogSyncState {
+    return {
+      syncId: "sync-1",
+      status: "RUNNING",
+      syncedCount: 250,
+      error: null,
+      startedAt: heartbeatAt,
+      heartbeatAt,
+      finishedAt: null,
+    };
+  }
+
+  it("giữ nguyên sync đang có tiến triển", async () => {
+    const syncs = fakeSyncs({
+      getState: vi.fn().mockResolvedValue(runningSince(new Date(Date.now() - 60_000))),
+    });
+
+    const state = await new GetCatalogSyncStatus(syncs).execute(SHOP);
+
+    expect(state.status).toBe("RUNNING");
+    expect(syncs.fail).not.toHaveBeenCalled();
+  });
+
+  it("kết thúc sync quá lâu không có tiến triển để UI không xoay mãi", async () => {
+    const stale = runningSince(new Date(Date.now() - CATALOG_SYNC_STALE_MS - 1_000));
+    const failed: CatalogSyncState = { ...stale, status: "FAILED", error: STALE_SYNC_ERROR };
+    const syncs = fakeSyncs({
+      getState: vi.fn().mockResolvedValueOnce(stale).mockResolvedValueOnce(failed),
+    });
+
+    const state = await new GetCatalogSyncStatus(syncs).execute(SHOP);
+
+    expect(syncs.fail).toHaveBeenCalledWith(SHOP, "sync-1", STALE_SYNC_ERROR);
+    expect(state.status).toBe("FAILED");
   });
 });
 

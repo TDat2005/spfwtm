@@ -10,6 +10,7 @@ import { createProductWebhookHandlers } from "./src/modules/product-media-sync/i
 import { PRISMA_CLIENT } from "./src/shared/nest/tokens.ts";
 import shopify, { SHOPIFY_API_VERSION } from "./shopify.js";
 import PrivacyWebhookHandlers from "./privacy.js";
+import { isStandalonePageRequest } from "./src/shared/platform.ts";
 
 const PORT = parseInt(
   process.env.BACKEND_PORT || process.env.PORT || "3000",
@@ -51,6 +52,8 @@ async function bootstrap(): Promise<void> {
   const ensureInstalled = shopify.ensureInstalledOnShop();
   http.use((request, response, next) => {
     if (request.path === "/api" || request.path.startsWith("/api/")) return next();
+    // Mở trực tiếp (không có ?shop=) là chế độ độc lập, không cần cài trên shop nào.
+    if (isStandalonePageRequest(request)) return next();
     return ensureInstalled(request, response, next);
   });
 

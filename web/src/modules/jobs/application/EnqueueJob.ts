@@ -14,6 +14,8 @@ export interface EnqueueJobInput {
   delayMs?: number;
   maxAttempts?: number;
   removeOnComplete?: boolean;
+  /** Xóa bản ghi đã xong/thất bại cùng jobId trước (retry, đưa lại job bị kẹt). */
+  replaceFinished?: boolean;
 }
 
 export class EnqueueJob {
@@ -45,6 +47,7 @@ export class EnqueueJob {
       delayMs: input.delayMs,
       maxAttempts: input.maxAttempts ?? 3,
       removeOnComplete: input.removeOnComplete,
+      replaceFinished: input.replaceFinished,
     });
   }
 }

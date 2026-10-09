@@ -50,24 +50,11 @@ export interface AutoWatermarkApplyQueue {
   }): Promise<void>;
 }
 
-export interface CollectionSummary {
-  id: string;
-  title: string;
-  productsCount: number | null;
-}
-
-/** Collection của một shop, gọi Shopify Admin API bằng offline session. */
-export interface ShopCollections {
-  isInCollection(productId: string, collectionId: string): Promise<boolean>;
-  /** null = collection không còn tồn tại. */
-  listProductIds(collectionId: string): Promise<string[] | null>;
-  getCollectionTitle(collectionId: string): Promise<string | null>;
-  search(query: string): Promise<CollectionSummary[]>;
-}
-
-export interface ShopCollectionsFactory {
-  forShop(shopDomain: string): Promise<ShopCollections>;
-}
+export type {
+  CollectionSummary,
+  ShopCollections,
+  ShopCollectionsFactory,
+} from "../../catalog/application/CollectionGateway.ts";
 
 export interface WatermarkDesignStore {
   save(shopDomain: string, design: WatermarkDesign): Promise<string>;

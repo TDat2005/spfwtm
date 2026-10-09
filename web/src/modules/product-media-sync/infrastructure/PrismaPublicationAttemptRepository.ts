@@ -3,11 +3,20 @@ import type {
   PublicationAttemptRepository,
   StartPublicationAttemptInput,
 } from "../application/PublicationAttemptRepository.ts";
+import type { StalePublicationAttempts } from "../application/RecoverMediaSync.ts";
 
 export class PrismaPublicationAttemptRepository
-  implements PublicationAttemptRepository
+  implements PublicationAttemptRepository, StalePublicationAttempts
 {
   constructor(private readonly prisma: PrismaClient) {}
+
+  async failStale(before: Date): Promise<number> {
+    const { count } = await this.prisma.publicationAttempt.updateMany({
+      where: { status: "PUBLISHING", createdAt: { lt: before } },
+      data: { status: "FAILED", completedAt: new Date() },
+    });
+    return count;
+  }
 
   async start(input: StartPublicationAttemptInput): Promise<void> {
     const shop = await this.prisma.shop.findUnique({

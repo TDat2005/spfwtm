@@ -30,11 +30,11 @@ export class StorageCleanupService {
     }
 
     if (options?.onlyPublished ?? true) {
-      whereClause.resultForJobs = {
-        some: {
-          publishedMedia: { isNot: null },
-        },
-      };
+      whereClause.OR = [
+        { resultForJobs: { some: { publishedMedia: { isNot: null } } } },
+        // Mồ côi: worker chết sau khi lưu ảnh nhưng trước khi gắn ảnh vào job.
+        { resultForJobs: { none: {} } },
+      ];
     }
 
     const assets = await this.prisma.mediaAsset.findMany({

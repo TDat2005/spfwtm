@@ -1,9 +1,20 @@
 import type { WatermarkDesign, WatermarkJob } from "../domain/WatermarkJob.ts";
 
+export interface WatermarkJobHistoryItem {
+  job: WatermarkJob;
+  productTitle: string;
+  /** Ảnh kết quả của job đang là ảnh đã đưa lên Shopify. */
+  published: boolean;
+}
+
 export interface WatermarkJobRepository {
   save(job: WatermarkJob): Promise<void>;
   findByIdForShop(id: string, shopDomain: string): Promise<WatermarkJob | null>;
-  listByShop(shopDomain: string): Promise<WatermarkJob[]>;
+  /** Job mới nhất trước. */
+  listPageByShop(
+    shopDomain: string,
+    range: { offset: number; limit: number }
+  ): Promise<{ items: WatermarkJobHistoryItem[]; total: number }>;
 }
 
 export interface ProductImageReader {

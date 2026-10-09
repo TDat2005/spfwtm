@@ -1,5 +1,5 @@
-import { Queue, type ConnectionOptions } from "bullmq";
-import type { JobPublisher } from "../application/JobQueue.ts";
+import { Queue, type ConnectionOptions, type JobState } from "bullmq";
+import type { JobInspector, JobPublisher } from "../application/JobQueue.ts";
 import type { BackgroundJob } from "../domain/BackgroundJob.ts";
 import {
   JOB_LANES,
@@ -13,7 +13,15 @@ interface BullMqJobQueueOptions {
   prefix?: string;
 }
 
-export class BullMqJobQueue implements JobPublisher {
+const LIVE_STATES: ReadonlySet<JobState | "unknown"> = new Set([
+  "waiting",
+  "prioritized",
+  "delayed",
+  "active",
+  "waiting-children",
+]);
+
+export class BullMqJobQueue implements JobPublisher, JobInspector {
   private readonly queues: Map<JobLane, Queue<Record<string, unknown>>>;
 
   constructor(options: BullMqJobQueueOptions) {
@@ -32,8 +40,7 @@ export class BullMqJobQueue implements JobPublisher {
   }
 
   async enqueue(job: BackgroundJob): Promise<void> {
-    const entry = toBullMqEntry(job);
-    await this.queue(job.lane).add(entry.name, entry.data, entry.opts);
+    await this.enqueueMany([job]);
   }
 
   async enqueueMany(jobs: BackgroundJob[]): Promise<void> {
@@ -44,8 +51,32 @@ export class BullMqJobQueue implements JobPublisher {
       byLane.set(job.lane, laneJobs);
     }
     for (const [lane, laneJobs] of byLane) {
+      const replaced = laneJobs.filter((job) => job.replaceFinished).map((job) => job.id);
+      if (replaced.length > 0) await this.removeFinishedJobs(replaced, [lane]);
       await this.queue(lane).addBulk(laneJobs.map(toBullMqEntry));
     }
+  }
+
+  async findLiveJobIds(
+    jobIds: string[],
+    lanes: readonly JobLane[]
+  ): Promise<Set<string>> {
+    const live = new Set<string>();
+    await this.forEachJobState(jobIds, lanes, (_lane, jobId, state) => {
+      if (LIVE_STATES.has(state)) live.add(jobId);
+    });
+    return live;
+  }
+
+  async removeFinishedJobs(
+    jobIds: string[],
+    lanes: readonly JobLane[]
+  ): Promise<void> {
+    await this.forEachJobState(jobIds, lanes, async (lane, jobId, state) => {
+      if (state === "completed" || state === "failed") {
+        await this.queue(lane).remove(jobId);
+      }
+    });
   }
 
   async close(): Promise<void> {
@@ -88,6 +119,20 @@ export class BullMqJobQueue implements JobPublisher {
           removeOnFail: { age: 30 * 24 * 60 * 60, count: 100 },
         },
       }
+    );
+  }
+
+  private async forEachJobState(
+    jobIds: string[],
+    lanes: readonly JobLane[],
+    visit: (lane: JobLane, jobId: string, state: JobState | "unknown") => void | Promise<void>
+  ): Promise<void> {
+    await Promise.all(
+      lanes.flatMap((lane) =>
+        jobIds.map(async (jobId) => {
+          await visit(lane, jobId, await this.queue(lane).getJobState(jobId));
+        })
+      )
     );
   }
 

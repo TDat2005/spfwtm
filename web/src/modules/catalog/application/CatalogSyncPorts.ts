@@ -1,11 +1,19 @@
 export type CatalogSyncStatus = "IDLE" | "RUNNING" | "COMPLETED" | "FAILED";
 
+/**
+ * Sync RUNNING mà quá lâu không có trang nào xong (worker chết, job mất khỏi
+ * queue) thì coi là bị gián đoạn: được bắt đầu lại và báo FAILED cho merchant.
+ */
+export const CATALOG_SYNC_STALE_MS = 15 * 60 * 1000;
+
 export interface CatalogSyncState {
   syncId: string | null;
   status: CatalogSyncStatus;
   syncedCount: number;
   error: string | null;
   startedAt: Date | null;
+  /** Lần cuối sync có tiến triển (bắt đầu hoặc xong một trang). */
+  heartbeatAt: Date | null;
   finishedAt: Date | null;
 }
 

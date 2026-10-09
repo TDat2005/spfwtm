@@ -14,17 +14,22 @@ import { MediaService } from "../modules/media/application/MediaService.ts";
 import { PublicationController } from "../modules/shopify-publication/presentation/PublicationController.ts";
 import { ListPublishedMedia } from "../modules/shopify-publication/application/ListPublishedMedia.ts";
 import { PublicationUseCaseFactory } from "../modules/shopify-publication/infrastructure/PublicationUseCaseFactory.ts";
+import { QueueProductRestores } from "../modules/shopify-publication/application/QueueProductRestores.ts";
 import { WatermarkController } from "../modules/watermark/presentation/WatermarkController.ts";
 import { CreateWatermarkJob } from "../modules/watermark/application/CreateWatermarkJob.ts";
 import { ListWatermarkJobs } from "../modules/watermark/application/ListWatermarkJobs.ts";
+import { ListStudioProducts } from "../modules/watermark/application/ListStudioProducts.ts";
 import { GetWatermarkJob } from "../modules/watermark/application/GetWatermarkJob.ts";
 import { RetryWatermarkJob } from "../modules/watermark/application/RetryWatermarkJob.ts";
 import { CancelWatermarkJob } from "../modules/watermark/application/CancelWatermarkJob.ts";
 import { ProcessWatermarkJob } from "../modules/watermark/application/ProcessWatermarkJob.ts";
 import { CreateWatermarkBatch } from "../modules/watermark/application/CreateWatermarkBatch.ts";
+import { CreateFilteredWatermarkBatches } from "../modules/watermark/application/CreateFilteredWatermarkBatches.ts";
 import { ListWatermarkBatches } from "../modules/watermark/application/ListWatermarkBatches.ts";
 import { CancelWatermarkBatch } from "../modules/watermark/application/CancelWatermarkBatch.ts";
+import { EnqueueWatermarkJob } from "../modules/watermark/application/EnqueueWatermarkJob.ts";
 import { EnqueueJob } from "../modules/jobs/application/EnqueueJob.ts";
+import { SHOP_COLLECTIONS } from "../modules/catalog/tokens.ts";
 import { ProductsController } from "./products/ProductsController.ts";
 import { ProductsService } from "./products/ProductsService.ts";
 import { SpaModule } from "./SpaModule.ts";
@@ -52,6 +57,7 @@ describe("Nest API routes", () => {
         { provide: ListProductTypes, useValue: unused },
         { provide: StartCatalogSync, useValue: unused },
         { provide: GetCatalogSyncStatus, useValue: unused },
+        { provide: SHOP_COLLECTIONS, useValue: unused },
         {
           provide: MediaService,
           useValue: {
@@ -63,9 +69,12 @@ describe("Nest API routes", () => {
         },
         { provide: ListPublishedMedia, useValue: { execute: async () => [] } },
         { provide: PublicationUseCaseFactory, useValue: unused },
+        { provide: QueueProductRestores, useValue: unused },
         { provide: CreateWatermarkBatch, useValue: { execute: createBatch } },
+        { provide: CreateFilteredWatermarkBatches, useValue: unused },
         { provide: CreateWatermarkJob, useValue: unused },
         { provide: ListWatermarkJobs, useValue: unused },
+        { provide: ListStudioProducts, useValue: unused },
         {
           provide: GetWatermarkJob,
           useValue: { execute: async () => { throw new Error("Không tìm thấy watermark job"); } },
@@ -76,6 +85,7 @@ describe("Nest API routes", () => {
         { provide: ListWatermarkBatches, useValue: unused },
         { provide: CancelWatermarkBatch, useValue: unused },
         { provide: EnqueueJob, useValue: unused },
+        { provide: EnqueueWatermarkJob, useValue: unused },
         { provide: ProductsService, useValue: { count: async () => 7 } },
         { provide: PRISMA_CLIENT, useValue: unused },
         { provide: SHOPIFY, useValue: unused },

@@ -14,9 +14,10 @@ import { BullMqCatalogSyncQueue } from "./infrastructure/BullMqCatalogSyncQueue.
 import { CatalogSyncJobHandlers } from "./infrastructure/CatalogSyncJobHandlers.ts";
 import { PrismaCatalogSyncRepository } from "./infrastructure/PrismaCatalogSyncRepository.ts";
 import { PrismaProductRepository } from "./infrastructure/PrismaProductRepository.ts";
+import { ShopifyCollectionsFactory } from "./infrastructure/ShopifyCollections.ts";
 import { ShopifyProductGatewayFactory } from "./infrastructure/ShopifyProductGatewayFactory.ts";
 import { CatalogController } from "./presentation/CatalogController.ts";
-import { CATALOG_SYNC_REPOSITORY, PRODUCT_REPOSITORY } from "./tokens.ts";
+import { CATALOG_SYNC_REPOSITORY, PRODUCT_REPOSITORY, SHOP_COLLECTIONS } from "./tokens.ts";
 
 @Module({
   imports: [JobsModule],
@@ -31,6 +32,11 @@ import { CATALOG_SYNC_REPOSITORY, PRODUCT_REPOSITORY } from "./tokens.ts";
       provide: CATALOG_SYNC_REPOSITORY,
       inject: [PRISMA_CLIENT],
       useFactory: (prisma: PrismaClient) => new PrismaCatalogSyncRepository(prisma),
+    },
+    {
+      provide: SHOP_COLLECTIONS,
+      inject: [SHOPIFY],
+      useFactory: (shopify: ShopifyApp) => new ShopifyCollectionsFactory(shopify),
     },
     {
       provide: ListProducts,
@@ -71,5 +77,6 @@ import { CATALOG_SYNC_REPOSITORY, PRODUCT_REPOSITORY } from "./tokens.ts";
     },
     CatalogSyncJobHandlers,
   ],
+  exports: [SHOP_COLLECTIONS],
 })
 export class CatalogModule {}

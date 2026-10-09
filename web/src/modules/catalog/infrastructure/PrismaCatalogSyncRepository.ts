@@ -16,6 +16,7 @@ export class PrismaCatalogSyncRepository implements CatalogSyncRepository {
         catalogSyncedCount: true,
         catalogSyncError: true,
         catalogSyncStartedAt: true,
+        catalogSyncHeartbeatAt: true,
         catalogSyncFinishedAt: true,
       },
     });
@@ -26,6 +27,7 @@ export class PrismaCatalogSyncRepository implements CatalogSyncRepository {
       syncedCount: shop?.catalogSyncedCount ?? 0,
       error: shop?.catalogSyncError ?? null,
       startedAt: shop?.catalogSyncStartedAt ?? null,
+      heartbeatAt: shop?.catalogSyncHeartbeatAt ?? null,
       finishedAt: shop?.catalogSyncFinishedAt ?? null,
     };
   }

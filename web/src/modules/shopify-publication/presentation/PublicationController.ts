@@ -1,24 +1,38 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Logger, Param, Post } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Param,
+  Post,
+} from "@nestjs/common";
 import type { Session } from "@shopify/shopify-api";
 import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
 import { toHttpException } from "../../../shared/nest/toHttpException.ts";
+import { parseCatalogFilter } from "../../watermark/domain/CatalogFilter.ts";
 import { ListPublishedMedia } from "../application/ListPublishedMedia.ts";
+import {
+  QueueProductRestores,
+  type RestoreSelection,
+} from "../application/QueueProductRestores.ts";
 import type { PublishedMedia } from "../domain/PublishedMedia.ts";
 import { PublicationUseCaseFactory } from "../infrastructure/PublicationUseCaseFactory.ts";
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import { PRISMA_CLIENT } from "../../../shared/nest/tokens.ts";
 import { EnqueueJob } from "../../jobs/application/EnqueueJob.ts";
-import { PUBLICATION_PUBLISH_V1 } from "../../jobs/domain/JobDefinitions.ts";
+import { batchPublishJob } from "../application/BatchPublishJob.ts";
 
 @Controller("api/publications")
 export class PublicationController {
-  private readonly logger = new Logger(PublicationController.name);
-
   constructor(
     @Inject(ListPublishedMedia) private readonly listPublishedMedia: ListPublishedMedia,
     @Inject(PublicationUseCaseFactory) private readonly useCases: PublicationUseCaseFactory,
     @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
     @Inject(EnqueueJob) private readonly enqueueJob: EnqueueJob,
+    @Inject(QueueProductRestores) private readonly queueProductRestores: QueueProductRestores,
   ) {}
 
   @Get()
@@ -42,6 +56,8 @@ export class PublicationController {
         watermarkJobId: jobId,
         shopDomain: session.shop,
         altText: typeof altText === "string" && altText.trim() ? altText.trim() : undefined,
+        // Ảnh mới thành ảnh chính và gỡ ảnh watermark cũ của app trên sản phẩm.
+        replacePrevious: true,
       });
       return { publishedMedia: toResponse(publishedMedia) };
     } catch (error) {
@@ -61,29 +77,35 @@ export class PublicationController {
       });
       if (!shop) throw new Error("Shop không tồn tại");
 
-      const jobs = await this.prisma.watermarkJob.findMany({
-        where: {
-          batchId,
-          shopId: shop.id,
-          status: "COMPLETED",
-          publishedMedia: null,
-        },
-        select: { id: true },
+      // Ghi yêu cầu TRƯỚC khi đọc job đã xong: job nào xong sau thời điểm này sẽ
+      // tự publish (WatermarkJobHandlers), job xong trước được đưa vào queue ngay
+      // dưới đây, nên không job nào bị sót.
+      const requested = await this.prisma.watermarkBatch.updateMany({
+        where: { id: batchId, shopId: shop.id },
+        data: { publishRequestedAt: new Date() },
       });
+      if (requested.count === 0) throw new Error("Không tìm thấy watermark batch");
+
+      const [jobs, pendingCount] = await Promise.all([
+        this.prisma.watermarkJob.findMany({
+          where: {
+            batchId,
+            shopId: shop.id,
+            status: "COMPLETED",
+            publishedMedia: null,
+          },
+          select: { id: true },
+        }),
+        this.prisma.watermarkJob.count({
+          where: { batchId, shopId: shop.id, status: { in: ["PENDING", "PROCESSING"] } },
+        }),
+      ]);
 
       await this.enqueueJob.executeMany(
-        jobs.map((job) => ({
-          ...PUBLICATION_PUBLISH_V1,
-          jobId: `publish_${job.id}`,
-          payload: {
-            watermarkJobId: job.id,
-            shopDomain: session.shop,
-          },
-          maxAttempts: 5,
-        })),
+        jobs.map((job) => batchPublishJob(job.id, session.shop)),
       );
 
-      return { success: true, queuedCount: jobs.length };
+      return { success: true, queuedCount: jobs.length, pendingCount };
     } catch (error) {
       throw toHttpException("Publication", error);
     }
@@ -125,56 +147,55 @@ export class PublicationController {
     }
   }
 
+  /** Khôi phục ảnh gốc cho các sản phẩm merchant chọn (hoặc mọi sản phẩm khớp bộ lọc), chạy nền. */
+  @Post("products/restore")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async restoreSelectedProducts(
+    @Body() body: Record<string, unknown>,
+    @ShopifySession() session: Session,
+  ) {
+    const selection = parseRestoreSelection(body);
+    try {
+      const result = await this.queueProductRestores.execute(session.shop, selection);
+      return { success: true, ...result };
+    } catch (error) {
+      throw toHttpException("Publication", error, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  /** Khôi phục mọi sản phẩm đang có ảnh watermark của app, chạy nền (một job mỗi sản phẩm). */
   @Post("restore-all")
-  @HttpCode(HttpStatus.OK)
+  @HttpCode(HttpStatus.ACCEPTED)
   async restoreAll(@ShopifySession() session: Session) {
     try {
-      const shop = await this.prisma.shop.findUnique({
-        where: { domain: session.shop },
-      });
-      if (!shop) throw new Error("Shop không tồn tại");
-
-      // Find products that have publishedMedia or have wm- in imageUrl
-      const published = await this.prisma.publishedMedia.findMany({
-        where: { shopId: shop.id },
-        select: { shopifyProductId: true },
-      });
-
-      const wmProducts = await this.prisma.catalogProduct.findMany({
-        where: {
-          shopId: shop.id,
-          OR: [
-            { shopifyProductId: { in: published.map((p) => p.shopifyProductId) } },
-            { imageUrl: { contains: "/wm-" } },
-          ],
-        },
-        select: { shopifyProductId: true },
-      });
-
-      const productIds = Array.from(
-        new Set([...published.map((p) => p.shopifyProductId), ...wmProducts.map((p) => p.shopifyProductId)])
-      );
-
-      // Chỉ chọn sản phẩm cần xét; việc xóa luôn đi qua use case, chỉ xóa media do app tạo.
-      const restoreProductOriginal = this.useCases.restoreProductOriginal(session);
-      let restoredCount = 0;
-      for (const pid of productIds) {
-        try {
-          await restoreProductOriginal.execute({ productId: pid, shopDomain: session.shop });
-          restoredCount++;
-        } catch (error) {
-          // Một sản phẩm lỗi không chặn các sản phẩm còn lại, nhưng phải để lại dấu vết.
-          this.logger.warn(
-            `Không khôi phục được sản phẩm ${pid}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-
-      return { success: true, restoredCount };
+      const { queuedCount } = await this.queueProductRestores.executeAll(session.shop);
+      return { success: true, queuedCount };
     } catch (error) {
       throw toHttpException("Publication", error);
     }
   }
+}
+
+/** Nhận đúng một trong hai: `{ productIds: [...] }` hoặc `{ filter: {...} }`. */
+function parseRestoreSelection(body: Record<string, unknown>): RestoreSelection {
+  const hasIds = body.productIds !== undefined;
+  const hasFilter = body.filter !== undefined;
+  if (hasIds === hasFilter) {
+    throw new BadRequestException({ error: "Cần gửi đúng một trong hai: productIds hoặc filter" });
+  }
+  if (hasFilter) {
+    try {
+      return { kind: "FILTER", filter: parseCatalogFilter(body.filter) };
+    } catch (error) {
+      throw new BadRequestException({
+        error: error instanceof Error ? error.message : "Bộ lọc sản phẩm không hợp lệ",
+      });
+    }
+  }
+  if (!Array.isArray(body.productIds) || !body.productIds.every((id) => typeof id === "string")) {
+    throw new BadRequestException({ error: "productIds phải là một mảng chuỗi" });
+  }
+  return { kind: "PRODUCT_IDS", productIds: body.productIds };
 }
 
 function toResponse(media: PublishedMedia) {

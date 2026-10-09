@@ -2,14 +2,19 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import type {
   BatchDispatchState,
-  CreatedBatchJob,
+  BatchSize,
+  ClaimedBatchJob,
   CreatedWatermarkBatch,
+  ResolvedBatchSelection,
   WatermarkBatchDispatchRepository,
   WatermarkBatchRepository,
-  WatermarkBatchSelection,
   WatermarkBatchStatus,
   WatermarkBatchSummary,
 } from "../application/BulkWatermarkPorts.ts";
+import {
+  INTERACTIVE_BATCH_LIMIT,
+  batchSizeOf,
+} from "../application/DispatchWatermarkBatch.ts";
 import type { WatermarkDesign } from "../domain/WatermarkDesign.ts";
 import { saveWatermarkDesign } from "./PrismaWatermarkDesigns.ts";
 
@@ -32,7 +37,7 @@ export class PrismaWatermarkBatchRepository
 
   async create(input: {
     shopDomain: string;
-    selection: WatermarkBatchSelection;
+    selection: ResolvedBatchSelection;
     maxJobs: number;
     design: WatermarkDesign;
   }): Promise<CreatedWatermarkBatch> {
@@ -43,10 +48,11 @@ export class PrismaWatermarkBatchRepository
       });
       if (!shop) throw new Error("Shop chưa đồng bộ catalog");
 
-      const { targets, skippedProducts } =
-        input.selection.kind === "PRODUCT_IDS"
-          ? await selectByIds(transaction, shop.id, input.selection.productIds)
-          : await selectByType(transaction, shop.id, input.selection.productType);
+      const { targets, skippedProducts } = await selectTargets(
+        transaction,
+        shop.id,
+        input.selection
+      );
       if (targets.length > input.maxJobs) {
         throw new Error(
           `Batch có ${targets.length.toLocaleString("vi-VN")} sản phẩm, vượt giới hạn ${input.maxJobs.toLocaleString("vi-VN")}`
@@ -149,54 +155,69 @@ export class PrismaWatermarkBatchRepository
     });
   }
 
-  async getDispatchState(
-    batchId: string,
-    staleBefore: Date
-  ): Promise<BatchDispatchState | null> {
+  async getDispatchState(batchId: string): Promise<BatchDispatchState | null> {
     const batch = await this.prisma.watermarkBatch.findUnique({
       where: { id: batchId },
-      select: { id: true, totalJobs: true, shop: { select: { domain: true } } },
+      select: {
+        id: true,
+        shopId: true,
+        totalJobs: true,
+        shop: { select: { domain: true } },
+      },
     });
     if (!batch) return null;
 
+    const size = batchSizeOf(batch.totalJobs);
     const inFlightJobs = await this.prisma.watermarkJob.count({
       where: {
-        batchId,
+        shopId: batch.shopId,
+        batch: { is: { totalJobs: totalJobsOf(size) } },
         OR: [
           { status: "PROCESSING" },
-          { status: "PENDING", enqueuedAt: { gte: staleBefore } },
+          { status: "PENDING", enqueuedAt: { not: null } },
         ],
       },
     });
     return {
       batchId: batch.id,
+      shopId: batch.shopId,
       shopDomain: batch.shop.domain,
-      totalJobs: batch.totalJobs,
+      size,
       inFlightJobs,
     };
   }
 
   async claimJobs(
-    batchId: string,
-    limit: number,
-    staleBefore: Date
-  ): Promise<CreatedBatchJob[]> {
-    const candidates = await this.prisma.watermarkJob.findMany({
-      where: { batchId, ...undispatchedPending(staleBefore) },
-      orderBy: { id: "asc" },
+    shopId: string,
+    size: BatchSize,
+    limit: number
+  ): Promise<ClaimedBatchJob[]> {
+    const batches = await this.prisma.watermarkBatch.findMany({
+      where: { shopId, totalJobs: totalJobsOf(size), jobs: { some: UNDISPATCHED } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: limit,
-      select: { id: true, product: { select: { shopifyProductId: true } } },
+      select: { id: true },
     });
-    if (candidates.length === 0) return [];
+
+    const claimed: ClaimedBatchJob[] = [];
+    for (const batch of batches) {
+      const remaining = limit - claimed.length;
+      if (remaining <= 0) break;
+      const jobs = await this.prisma.watermarkJob.findMany({
+        where: { batchId: batch.id, ...UNDISPATCHED },
+        orderBy: { id: "asc" },
+        take: remaining,
+        select: { id: true },
+      });
+      claimed.push(...jobs.map((job) => ({ id: job.id, batchId: batch.id })));
+    }
+    if (claimed.length === 0) return [];
 
     await this.prisma.watermarkJob.updateMany({
-      where: { id: { in: candidates.map((job) => job.id) }, status: "PENDING" },
+      where: { id: { in: claimed.map((job) => job.id) }, ...UNDISPATCHED },
       data: { enqueuedAt: new Date() },
     });
-    return candidates.map((job) => ({
-      id: job.id,
-      productId: job.product.shopifyProductId,
-    }));
+    return claimed;
   }
 
   async releaseJobs(jobIds: string[]): Promise<void> {
@@ -208,24 +229,56 @@ export class PrismaWatermarkBatchRepository
   }
 
   async listBatchesNeedingDispatch(
-    staleBefore: Date,
+    afterBatchId: string | null,
     limit: number
   ): Promise<string[]> {
-    const rows = await this.prisma.watermarkJob.findMany({
-      where: { batchId: { not: null }, ...undispatchedPending(staleBefore) },
-      distinct: ["batchId"],
-      select: { batchId: true },
+    const rows = await this.prisma.watermarkJob.groupBy({
+      by: ["batchId"],
+      where: {
+        batchId: afterBatchId === null ? { not: null } : { gt: afterBatchId },
+        ...UNDISPATCHED,
+      },
+      orderBy: { batchId: "asc" },
       take: limit,
     });
     return rows.flatMap((row) => (row.batchId ? [row.batchId] : []));
   }
 }
 
-function undispatchedPending(staleBefore: Date) {
-  return {
-    status: "PENDING" as const,
-    OR: [{ enqueuedAt: null }, { enqueuedAt: { lt: staleBefore } }],
-  };
+/** Job PENDING chưa được đưa vào queue. */
+const UNDISPATCHED = { status: "PENDING", enqueuedAt: null } as const;
+
+function totalJobsOf(size: BatchSize) {
+  return size === "SMALL"
+    ? { lte: INTERACTIVE_BATCH_LIMIT }
+    : { gt: INTERACTIVE_BATCH_LIMIT };
+}
+
+function selectTargets(
+  transaction: Transaction,
+  shopId: string,
+  selection: ResolvedBatchSelection
+): Promise<{ targets: BatchTarget[]; skippedProducts: number }> {
+  switch (selection.kind) {
+    case "PRODUCT_IDS":
+      return selectByIds(transaction, shopId, selection.productIds);
+    case "PRODUCT_TYPE":
+      return selectByType(transaction, shopId, selection.productType);
+    case "COLLECTION":
+      return selectExisting(
+        transaction,
+        shopId,
+        selection.productIds,
+        "Collection không có sản phẩm nào đã đồng bộ và có ảnh nguồn"
+      );
+    case "PRODUCT_LIST":
+      return selectExisting(
+        transaction,
+        shopId,
+        selection.productIds,
+        "Các sản phẩm đã chọn không còn ảnh nguồn"
+      );
+  }
 }
 
 async function selectByIds(
@@ -295,6 +348,44 @@ async function selectByType(
     })),
     skippedProducts: totalProducts - targets.length,
   };
+}
+
+/**
+ * Sản phẩm (GID) có trong catalog và có ảnh nguồn, giữ nguyên thứ tự truyền vào:
+ * thành viên collection, hoặc danh sách đã lọc ở bước "chọn tất cả khớp bộ lọc".
+ * Sản phẩm chưa đồng bộ, đã xóa hoặc không có ảnh được bỏ qua, giống chọn theo loại.
+ */
+async function selectExisting(
+  transaction: Transaction,
+  shopId: string,
+  productIds: string[],
+  emptyMessage: string
+): Promise<{ targets: BatchTarget[]; skippedProducts: number }> {
+  const byProductId = new Map<string, BatchTarget>();
+  for (let i = 0; i < productIds.length; i += CREATE_CHUNK_SIZE) {
+    const products = await transaction.catalogProduct.findMany({
+      where: {
+        shopId,
+        shopifyProductId: { in: productIds.slice(i, i + CREATE_CHUNK_SIZE) },
+        deletedAt: null,
+        imageUrl: { not: null },
+      },
+      select: { id: true, shopifyProductId: true, imageUrl: true, originalImageUrl: true },
+    });
+    for (const product of products) {
+      byProductId.set(product.shopifyProductId, {
+        id: product.id,
+        shopifyProductId: product.shopifyProductId,
+        imageUrl: product.originalImageUrl ?? product.imageUrl!,
+      });
+    }
+  }
+  // Giữ thứ tự sản phẩm như danh sách truyền vào.
+  const targets = productIds.flatMap((id) => byProductId.get(id) ?? []);
+  if (targets.length === 0) {
+    throw new Error(emptyMessage);
+  }
+  return { targets, skippedProducts: productIds.length - targets.length };
 }
 
 function batchStatus(

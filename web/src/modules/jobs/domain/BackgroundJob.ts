@@ -21,6 +21,11 @@ export interface BackgroundJobProps {
   attempts?: number;
   maxAttempts?: number;
   removeOnComplete?: boolean;
+  /**
+   * Xóa bản ghi đã xong/thất bại cùng jobId trước khi đưa vào queue. Không có cờ
+   * này thì BullMQ bỏ qua job trùng id với bản ghi cũ còn giữ (thất bại: 7 ngày).
+   */
+  replaceFinished?: boolean;
   lastError?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
@@ -37,6 +42,7 @@ export class BackgroundJob {
   readonly delayMs: number;
   readonly maxAttempts: number;
   readonly removeOnComplete?: boolean;
+  readonly replaceFinished: boolean;
   readonly createdAt: Date;
   private currentStatus: BackgroundJobStatus;
   private currentAttempts: number;
@@ -68,6 +74,7 @@ export class BackgroundJob {
     this.currentAttempts = props.attempts ?? 0;
     this.maxAttempts = props.maxAttempts ?? 3;
     this.removeOnComplete = props.removeOnComplete;
+    this.replaceFinished = props.replaceFinished ?? false;
     this.currentLastError = props.lastError ?? null;
     this.createdAt = props.createdAt ?? new Date();
     this.currentUpdatedAt = props.updatedAt ?? new Date();

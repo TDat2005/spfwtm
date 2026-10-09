@@ -8,6 +8,12 @@ export interface WebhookInboxItem {
   shopDomain: string;
   productId: string;
   triggeredAt: Date;
+  /**
+   * Lúc job bắt đầu xử lý. Chỉ webhook của sản phẩm nhận trước lúc này mới được
+   * đánh dấu xong; webhook đến trong lúc đang xử lý (trạng thái sản phẩm đọc từ
+   * Shopify có thể đã cũ) được giữ lại cho lượt sau.
+   */
+  claimedAt: Date;
 }
 
 export interface ProductMediaTrackingState {

@@ -13,10 +13,11 @@ import {
   TextField,
 } from "@shopify/polaris";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "react-query";
 import type { SerializedWatermarkLayer } from "../../src/modules/watermark/domain/WatermarkDesign.ts";
 import { fetchJson } from "../utils/fetchJson";
+import { useDebounced } from "../utils/useDebounced";
 
 type RuleScope = "ALL" | "COLLECTION" | "PRODUCT_TYPE";
 
@@ -421,13 +422,4 @@ function triggerText(rule: RuleDto): string {
   ]
     .filter(Boolean)
     .join(" · ");
-}
-
-function useDebounced<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(timer);
-  }, [value, delayMs]);
-  return debounced;
 }

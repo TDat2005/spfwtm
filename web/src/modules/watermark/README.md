@@ -32,6 +32,10 @@ PENDING ──cancel──> CANCELLED
 
 - `CreateWatermarkJob`: lấy ảnh sản phẩm và tạo aggregate.
 - `ProcessWatermarkJob`: tải source/logo, gọi processor, lưu ảnh kết quả.
+- `EnqueueWatermarkJob`: đưa job lẻ (tạo tay, retry, auto-rule) vào queue và ghi `enqueuedAt`.
+- `DispatchWatermarkBatch`: nhỏ giọt job của batch vào queue theo cửa sổ của từng shop.
+- `CreateFilteredWatermarkBatches`: "chọn tất cả sản phẩm khớp bộ lọc". Server tìm sản phẩm theo đúng bộ lọc studio đang dùng (`domain/CatalogFilter.ts`, UI import chung file này) ngay lúc bấm, chia thành batch tối đa 5.000 job.
+- `RecoverWatermarkJobs`: đối chiếu DB với queue, đưa lại job bị mất và đánh `FAILED` job bị worker bỏ dở.
 - `GetWatermarkJob` và `ListWatermarkJobs`: đọc job trong đúng shop.
 - `RetryWatermarkJob` và `CancelWatermarkJob`: yêu cầu aggregate thực hiện transition rồi lưu lại.
 - `WatermarkPorts`: interface mà application cần; lớp application không biết Prisma hay Sharp hoạt động thế nào.
@@ -46,6 +50,17 @@ PENDING ──cancel──> CANCELLED
 ### Presentation
 
 `WatermarkController` chuyển HTTP body thành input của use case. Controller không tự chứa luật watermark.
+
+## "Publish tất cả" một batch
+
+- Nút này ghi `publishRequestedAt` lên batch rồi mới đưa các job đã xong vào queue
+  publish. Job nào của batch xong **sau** lúc bấm cũng tự publish
+  (`WatermarkJobHandlers`), nên không còn ảnh bị sót vì xong muộn.
+- Publish (cả batch lẫn từng ảnh) đặt ảnh mới làm ảnh chính và **gỡ ảnh watermark
+  cũ của app** trên sản phẩm; ảnh gốc của merchant không bị đụng tới.
+- Sản phẩm đã có ảnh watermark mới hơn (từ batch sau) thì publish lại batch cũ
+  được bỏ qua, không đè ảnh mới bằng ảnh cũ.
+- Lần publish trước bị lỗi thì bấm lại vẫn thử lại được (`replaceFinished`).
 
 ## Luồng khi người dùng nhấn “Tạo ảnh watermark”
 

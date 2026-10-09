@@ -3,6 +3,7 @@ import type { PrismaClient } from "../../../generated/prisma/client.ts";
 import { PRISMA_CLIENT, SHOPIFY, type ShopifyApp } from "../../../shared/nest/tokens.ts";
 import {
   PUBLICATION_PUBLISH_V1,
+  PUBLICATION_RESTORE_PRODUCT_V1,
   PUBLICATION_RESTORE_V1,
   assertJobVersion,
 } from "../../jobs/domain/JobDefinitions.ts";
@@ -30,6 +31,11 @@ export class PublicationJobHandlers implements OnModuleInit {
       assertJobVersion(payload, PUBLICATION_RESTORE_V1);
       await this.restore(payload);
     });
+
+    this.worker.registerHandler(PUBLICATION_RESTORE_PRODUCT_V1.jobName, async (payload) => {
+      assertJobVersion(payload, PUBLICATION_RESTORE_PRODUCT_V1);
+      await this.restoreProduct(payload);
+    });
   }
 
   private async publish(payload: Record<string, unknown>): Promise<void> {
@@ -41,6 +47,10 @@ export class PublicationJobHandlers implements OnModuleInit {
 
     if (payload.onlyIfLatest === true && (await this.hasNewerAutoJob(watermarkJobId))) {
       this.logger.log(`Bỏ qua publish ${watermarkJobId}: sản phẩm đã có job auto mới hơn`);
+      return;
+    }
+    if (payload.onlyIfNewest === true && (await this.hasNewerCompletedJob(watermarkJobId))) {
+      this.logger.log(`Bỏ qua publish ${watermarkJobId}: sản phẩm đã có ảnh watermark mới hơn`);
       return;
     }
 
@@ -69,6 +79,17 @@ export class PublicationJobHandlers implements OnModuleInit {
     await this.useCases.restoreOriginalImage(session).execute({ watermarkJobId, shopDomain });
   }
 
+  /** Gỡ mọi ảnh watermark của app khỏi một sản phẩm (merchant khôi phục nhiều sản phẩm). */
+  private async restoreProduct(payload: Record<string, unknown>): Promise<void> {
+    const productId = String(payload.productId ?? "");
+    const shopDomain = String(payload.shopDomain ?? "");
+    if (!productId || !shopDomain) {
+      throw new Error("PUBLICATION_RESTORE_PRODUCT_V1 thiếu productId hoặc shopDomain");
+    }
+    const session = await this.offlineSession(shopDomain);
+    await this.useCases.restoreProductOriginal(session).execute({ productId, shopDomain });
+  }
+
   private async offlineSession(shopDomain: string) {
     const session = await this.shopify.config.sessionStorage.loadSession(
       this.shopify.api.session.getOfflineId(shopDomain),
@@ -94,6 +115,26 @@ export class PublicationJobHandlers implements OnModuleInit {
         catalogProductId: job.catalogProductId,
         ruleId: { not: null },
         status: { not: "CANCELLED" },
+        createdAt: { gt: job.createdAt },
+      },
+    });
+    return newer > 0;
+  }
+
+  /**
+   * Publish cả batch luôn gỡ ảnh watermark cũ của app. Batch cũ được bấm publish
+   * lại sau batch mới hơn thì không được đè ảnh mới bằng ảnh cũ.
+   */
+  private async hasNewerCompletedJob(watermarkJobId: string): Promise<boolean> {
+    const job = await this.prisma.watermarkJob.findUnique({
+      where: { id: watermarkJobId },
+      select: { catalogProductId: true, createdAt: true },
+    });
+    if (!job) return false;
+    const newer = await this.prisma.watermarkJob.count({
+      where: {
+        catalogProductId: job.catalogProductId,
+        status: "COMPLETED",
         createdAt: { gt: job.createdAt },
       },
     });

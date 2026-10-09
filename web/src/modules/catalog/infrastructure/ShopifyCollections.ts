@@ -3,7 +3,7 @@ import type {
   CollectionSummary,
   ShopCollections,
   ShopCollectionsFactory,
-} from "../application/AutoWatermarkPorts.ts";
+} from "../application/CollectionGateway.ts";
 
 interface ShopifyGraphqlClient {
   request<T>(

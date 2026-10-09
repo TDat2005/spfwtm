@@ -1,3 +1,3 @@
 export const AUTO_WATERMARK_RULES = Symbol("AUTO_WATERMARK_RULES");
 export const AUTO_WATERMARK_APPLY_QUEUE = Symbol("AUTO_WATERMARK_APPLY_QUEUE");
-export const SHOP_COLLECTIONS = Symbol("SHOP_COLLECTIONS");
+export { SHOP_COLLECTIONS } from "../catalog/tokens.ts";

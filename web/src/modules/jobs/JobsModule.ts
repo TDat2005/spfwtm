@@ -53,12 +53,11 @@ const REDIS_RUNTIME_CONFIG = Symbol("REDIS_RUNTIME_CONFIG");
   exports: [EnqueueJob, BullMqJobQueue, BullMqWorker],
 })
 export class JobsModule
-  implements OnApplicationBootstrap, BeforeApplicationShutdown, OnApplicationShutdown
-{
+  implements OnApplicationBootstrap, BeforeApplicationShutdown, OnApplicationShutdown {
   constructor(
     @Inject(BullMqJobQueue) private readonly queue: BullMqJobQueue,
     @Inject(BullMqWorker) private readonly worker: BullMqWorker,
-  ) {}
+  ) { }
 
   onApplicationBootstrap(): void {
     this.worker.start();

@@ -69,7 +69,8 @@ export class AutoWatermarkJobHandlers implements OnModuleInit, OnApplicationBoot
             (summary.collectionMissing ? " (collection không còn tồn tại)" : ""),
         );
       }
-    });
+      // Quét toàn bộ sản phẩm của shop: thời gian tùy số sản phẩm, không canh.
+    }, { stuckAfterMs: null });
 
     this.worker.registerHandler(AUTO_WATERMARK_SYNC_V1.jobName, async (payload) => {
       assertJobVersion(payload, AUTO_WATERMARK_SYNC_V1);

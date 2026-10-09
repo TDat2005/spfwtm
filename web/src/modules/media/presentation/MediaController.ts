@@ -12,9 +12,8 @@ import {
   Res,
   StreamableFile,
 } from "@nestjs/common";
-import type { Session } from "@shopify/shopify-api";
 import type { Response } from "express";
-import { ShopifySession } from "../../../shared/nest/ShopifySession.ts";
+import { CurrentShop } from "../../../shared/nest/CurrentShop.ts";
 import { toHttpException } from "../../../shared/nest/toHttpException.ts";
 import { MediaService } from "../application/MediaService.ts";
 import { StorageCleanupService } from "../application/StorageCleanupService.ts";
@@ -30,7 +29,7 @@ export class MediaController {
   @HttpCode(HttpStatus.OK)
   async cleanup(
     @Body("olderThanDays") olderThanDays: unknown,
-    @ShopifySession() session: Session,
+    @CurrentShop() shopDomain: string,
   ) {
     try {
       if (!this.cleanupService) {
@@ -38,7 +37,7 @@ export class MediaController {
       }
       const days = typeof olderThanDays === "number" ? olderThanDays : 7;
       const result = await this.cleanupService.cleanupProcessedAssets({
-        shopDomain: session.shop,
+        shopDomain,
         olderThanDays: days,
       });
       return { success: true, ...result };
@@ -50,11 +49,11 @@ export class MediaController {
   @Get("assets/:id/content")
   async content(
     @Param("id") id: string,
-    @ShopifySession() session: Session,
+    @CurrentShop() shopDomain: string,
     @Res({ passthrough: true }) response: Response,
   ): Promise<StreamableFile> {
     try {
-      const result = await this.mediaService.readForShop(id, session.shop);
+      const result = await this.mediaService.readForShop(id, shopDomain);
       response.set("Cache-Control", "private, max-age=3600");
       return new StreamableFile(result.bytes, { type: result.asset.mimeType });
     } catch (error) {
@@ -65,10 +64,10 @@ export class MediaController {
   @Post("upload")
   async upload(
     @Body() body: { dataUrl?: string; imageUrl?: string },
-    @ShopifySession() session: Session,
+    @CurrentShop() shopDomain: string,
   ) {
     try {
-      const asset = await this.store(session.shop, body);
+      const asset = await this.store(shopDomain, body);
       return { assetId: asset.id, url: `/api/media/assets/${asset.id}/content` };
     } catch (error) {
       throw toHttpException("Media", error, HttpStatus.BAD_REQUEST);

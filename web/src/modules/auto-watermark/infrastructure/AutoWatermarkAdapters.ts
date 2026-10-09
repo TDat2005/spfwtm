@@ -4,9 +4,9 @@ import {
   AUTO_WATERMARK_APPLY_V1,
   JOB_PRIORITY,
   PUBLICATION_RESTORE_V1,
-  WATERMARK_PROCESS_V1,
 } from "../../jobs/domain/JobDefinitions.ts";
 import type { DispatchWatermarkBatch } from "../../watermark/application/DispatchWatermarkBatch.ts";
+import type { EnqueueWatermarkJob } from "../../watermark/application/EnqueueWatermarkJob.ts";
 import type { WatermarkDesign } from "../../watermark/domain/WatermarkDesign.ts";
 import {
   readWatermarkDesign,
@@ -21,18 +21,13 @@ import type {
 
 export class BullMqAutoWatermarkJobQueue implements AutoWatermarkJobQueue {
   constructor(
-    private readonly enqueue: EnqueueJob,
+    private readonly enqueue: Pick<EnqueueWatermarkJob, "execute">,
     private readonly dispatcher: Pick<DispatchWatermarkBatch, "execute">,
   ) {}
 
   async enqueueJob(jobId: string, shopDomain: string): Promise<void> {
     // Một sản phẩm vừa được tạo/đổi ảnh: lane interactive, nhường job merchant bấm tay.
-    await this.enqueue.execute({
-      ...WATERMARK_PROCESS_V1,
-      jobId: `wm_${jobId}`,
-      priority: JOB_PRIORITY.HIGH,
-      payload: { jobId, shopDomain },
-    });
+    await this.enqueue.execute({ jobId, shopDomain, priority: JOB_PRIORITY.HIGH });
   }
 
   async dispatchBatch(batchId: string): Promise<void> {

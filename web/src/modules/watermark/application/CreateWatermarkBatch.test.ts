@@ -19,9 +19,14 @@ function setup(jobCount = 2) {
     cancel: vi.fn(),
   };
   const dispatch = vi.fn().mockResolvedValue(0);
-  const useCase = new CreateWatermarkBatch(repository, { execute: dispatch });
-  return { repository, dispatch, useCase };
+  const collections = {
+    listProductIds: vi.fn<(shopDomain: string, collectionId: string) => Promise<string[] | null>>(),
+  };
+  const useCase = new CreateWatermarkBatch(repository, { execute: dispatch }, collections);
+  return { repository, dispatch, collections, useCase };
 }
+
+const COLLECTION = "gid://shopify/Collection/42";
 
 describe("CreateWatermarkBatch", () => {
   it("tạo batch theo loại sản phẩm với giới hạn lớn hơn chọn tay", async () => {
@@ -66,6 +71,57 @@ describe("CreateWatermarkBatch", () => {
 
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith("batch-1");
+  });
+
+  it("tạo batch theo collection từ danh sách sản phẩm lấy trên Shopify", async () => {
+    const { repository, collections, useCase } = setup();
+    collections.listProductIds.mockResolvedValue(["gid://shopify/Product/1", "gid://shopify/Product/2"]);
+
+    await useCase.execute({
+      shopDomain: SHOP,
+      selection: { kind: "COLLECTION", collectionId: ` ${COLLECTION} ` },
+      layers,
+    });
+
+    expect(collections.listProductIds).toHaveBeenCalledWith(SHOP, COLLECTION);
+    expect(repository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selection: {
+          kind: "COLLECTION",
+          collectionId: COLLECTION,
+          productIds: ["gid://shopify/Product/1", "gid://shopify/Product/2"],
+        },
+        maxJobs: 5_000,
+      }),
+    );
+  });
+
+  it("báo lỗi khi collection không còn trên Shopify hoặc chưa có sản phẩm", async () => {
+    const { repository, collections, useCase } = setup();
+    const selection = { kind: "COLLECTION" as const, collectionId: COLLECTION };
+
+    collections.listProductIds.mockResolvedValueOnce(null);
+    await expect(useCase.execute({ shopDomain: SHOP, selection, layers })).rejects.toThrow(
+      "Không tìm thấy collection",
+    );
+    collections.listProductIds.mockResolvedValueOnce([]);
+    await expect(useCase.execute({ shopDomain: SHOP, selection, layers })).rejects.toThrow(
+      "chưa có sản phẩm",
+    );
+    expect(repository.create).not.toHaveBeenCalled();
+  });
+
+  it("không gọi Shopify khi collection ID không hợp lệ", async () => {
+    const { collections, useCase } = setup();
+
+    await expect(
+      useCase.execute({
+        shopDomain: SHOP,
+        selection: { kind: "COLLECTION", collectionId: "gid://shopify/Product/1" },
+        layers,
+      }),
+    ).rejects.toThrow("Collection không hợp lệ");
+    expect(collections.listProductIds).not.toHaveBeenCalled();
   });
 
   it("vẫn giới hạn 1.000 sản phẩm khi chọn tay", async () => {

@@ -51,7 +51,7 @@ export class WatermarkJob {
       throw new Error("Shop domain không được để trống");
     if (!props.productId.trim())
       throw new Error("Product ID không được để trống");
-    if (!isHttpsUrl(props.sourceImageUrl))
+    if (!isSupportedSourceUrl(props.sourceImageUrl))
       throw new Error("URL ảnh nguồn phải sử dụng HTTPS");
 
     this.id = props.id;
@@ -119,7 +119,9 @@ export class WatermarkJob {
   }
 }
 
-function isHttpsUrl(value: string): boolean {
+/** HTTPS (ảnh Shopify) hoặc media đã lưu trong app (ảnh tải lên ở chế độ độc lập). */
+function isSupportedSourceUrl(value: string): boolean {
+  if (/^\/api\/media\/assets\/[a-zA-Z0-9_-]+\/content$/.test(value)) return true;
   try {
     return new URL(value).protocol === "https:";
   } catch {

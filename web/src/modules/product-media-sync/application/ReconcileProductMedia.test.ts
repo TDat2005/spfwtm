@@ -28,6 +28,7 @@ function setup(sourceMediaId: string | null, publishedMediaIds: string[] = []) {
       shopDomain: "shop.myshopify.com",
       productId: product.productId,
       triggeredAt: new Date(),
+      claimedAt: new Date(),
     }),
     getTrackingState: vi.fn().mockResolvedValue({
       sourceMediaId,

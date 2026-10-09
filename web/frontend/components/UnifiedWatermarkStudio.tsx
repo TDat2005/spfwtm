@@ -1,4 +1,5 @@
 import {
+  Autocomplete,
   Badge,
   Banner,
   Button,
@@ -8,7 +9,9 @@ import {
   DataTable,
   FormLayout,
   IndexTable,
+  IndexTableSelectionType,
   Layout,
+  Pagination,
   ProgressBar,
   RangeSlider,
   Select,
@@ -18,14 +21,21 @@ import {
   Text,
   TextField,
   Thumbnail,
-  useIndexResourceState,
 } from "@shopify/polaris";
-import { useAppBridge } from "@shopify/app-bridge-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "react-query";
-import { AutoWatermarkRules } from "./AutoWatermarkRules";
+import { useToast } from "./providers/ToastProvider";
+import { ProductPicker } from "./ProductPicker";
+import { StandaloneImageUploader } from "./StandaloneImageUploader";
 import { WatermarkPreview } from "./WatermarkPreview";
 import { fetchJson } from "../utils/fetchJson";
+import { useDebounced } from "../utils/useDebounced";
+import {
+  studioProductsUrl,
+  type StudioProductDto,
+  type StudioProductsResponse,
+} from "../utils/studioProducts";
+import { isShopify } from "../platform";
 import {
   MAX_LOGO_LAYERS,
   MAX_TILED_LAYERS,
@@ -34,21 +44,15 @@ import {
   type SerializedWatermarkDesign,
   type SerializedWatermarkLayer,
 } from "../../src/modules/watermark/domain/WatermarkDesign.ts";
-
-interface ProductDto extends Record<string, unknown> {
-  id: string;
-  title: string;
-  status: "ACTIVE" | "DRAFT" | "ARCHIVED";
-  productType: string;
-  imageUrl: string | null;
-  imageAltText: string | null;
-  needsReview: boolean;
-  sourceVersion: number;
-}
-
-interface CatalogResponse {
-  products: ProductDto[];
-}
+import {
+  CATALOG_SCOPES,
+  type CatalogFilter,
+  type CatalogScope,
+} from "../../src/modules/watermark/domain/CatalogFilter.ts";
+import {
+  FILTER_BATCH_SIZE,
+  MAX_FILTER_JOBS,
+} from "../../src/modules/watermark/application/CreateFilteredWatermarkBatches.ts";
 
 interface ProductTypeDto {
   productType: string;
@@ -90,8 +94,18 @@ interface WatermarkJobDto {
   createdAt: string;
 }
 
+/** Một dòng của GET /api/watermarks/jobs (lịch sử, mới nhất trước). */
+interface WatermarkJobHistoryDto extends WatermarkJobDto {
+  productTitle: string;
+  /** Ảnh kết quả đang là ảnh đã đưa lên Shopify. */
+  published: boolean;
+}
+
 interface JobsResponse {
-  jobs: WatermarkJobDto[];
+  jobs: WatermarkJobHistoryDto[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 interface JobResponse {
@@ -122,13 +136,27 @@ interface BatchesResponse {
   batches: WatermarkBatchDto[];
 }
 
+interface CollectionDto {
+  id: string;
+  title: string;
+  productsCount: number | null;
+}
+
+interface CollectionsResponse {
+  collections: CollectionDto[];
+}
+
+interface CreatedBatchDto {
+  id: string;
+  totalJobs: number;
+  skippedProducts: number;
+  createdAt: string;
+}
+
 interface CreateBatchResponse {
-  batch: {
-    id: string;
-    totalJobs: number;
-    skippedProducts: number;
-    createdAt: string;
-  };
+  batch: CreatedBatchDto;
+  /** "Chọn tất cả khớp bộ lọc" hơn 5.000 sản phẩm được chia thành nhiều batch. */
+  batches?: CreatedBatchDto[];
 }
 
 interface PublishedMediaDto {
@@ -140,12 +168,15 @@ interface PublishedMediaDto {
   createdAt: string;
 }
 
-interface PublicationsResponse {
-  publications: PublishedMediaDto[];
-}
-
 interface SuccessResponse {
   success: boolean;
+}
+
+interface RestoreSelectedResponse {
+  success: boolean;
+  queuedCount: number;
+  /** Sản phẩm được chọn nhưng không có ảnh watermark của app. */
+  skippedCount: number;
 }
 
 interface WatermarkTemplateDto {
@@ -161,7 +192,15 @@ interface TemplatesResponse {
 }
 
 const ALL_TYPES = "all";
+/** Ở chế độ độc lập mỗi "sản phẩm" là một ảnh tải lên. */
+const ITEM = isShopify ? "sản phẩm" : "ảnh";
 const typeValue = (productType: string) => `type:${productType}`;
+const typeFromValue = (value: string) => value.slice("type:".length);
+/** Bảng sản phẩm và lịch sử lấy từng trang từ server; "chọn tất cả khớp bộ lọc" vẫn áp dụng cho mọi trang. */
+const PRODUCTS_PAGE_SIZE = 50;
+const HISTORY_PAGE_SIZE = 20;
+/** Batch chọn tay tối đa ngần này sản phẩm (cùng giới hạn của server). */
+const MAX_MANUAL_SELECTION = 1_000;
 const typeLabel = (productType: string) => productType || "Chưa phân loại";
 
 const positionOptions = [
@@ -229,7 +268,7 @@ const fontOptions = [
 ].map((font) => ({ label: font, value: font }));
 
 export function UnifiedWatermarkStudio() {
-  const shopify = useAppBridge();
+  const toast = useToast();
   const queryClient = useQueryClient();
 
   // --- Thiết kế watermark nhiều lớp (dùng chung cho Single và Bulk) ---
@@ -277,8 +316,8 @@ export function UnifiedWatermarkStudio() {
       return next;
     });
 
-  // --- Preview Product Selection ---
-  const [previewProductId, setPreviewProductId] = useState<string>("");
+  // --- Sản phẩm xem mẫu, cũng là sản phẩm của tab "Watermark 1 sản phẩm" ---
+  const [focusedProduct, setFocusedProduct] = useState<StudioProductDto | null>(null);
   const [previewWithWatermark, setPreviewWithWatermark] = useState(true);
 
   // --- Application Tab: 0 = Bulk (Hàng loạt), 1 = Single (Đơn lẻ) ---
@@ -287,11 +326,17 @@ export function UnifiedWatermarkStudio() {
   // --- Bulk Filter & Selection State ---
   const [scope, setScope] = useState("all");
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounced(search, 300);
   const [typeFilter, setTypeFilter] = useState(ALL_TYPES);
+  const [collectionFilter, setCollectionFilter] = useState<CollectionDto | null>(null);
+  const [collectionInput, setCollectionInput] = useState("");
+  const collectionQuery = useDebounced(collectionInput, 400);
 
   // --- Single Mode State ---
-  const [singleProductId, setSingleProductId] = useState("");
   const [activeSingleJobId, setActiveSingleJobId] = useState<string | null>(null);
+
+  // --- Lịch sử watermark ---
+  const [historyPage, setHistoryPage] = useState(1);
 
   // --- Templates & Presets State ---
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
@@ -308,11 +353,55 @@ export function UnifiedWatermarkStudio() {
     { refetchOnWindowFocus: false }
   );
 
-  const catalog = useQuery<CatalogResponse, Error>(
-    ["catalogProducts"],
-    () => fetchJson<CatalogResponse>("/api/catalog/products"),
-    { refetchOnWindowFocus: false, refetchInterval: 5_000 }
+  // Bộ lọc đang xem. Server lọc và phân trang theo đúng bộ lọc này, và dùng lại
+  // nó khi merchant "chọn tất cả sản phẩm khớp bộ lọc".
+  const catalogFilter = useMemo<CatalogFilter>(
+    () => ({
+      scope: (CATALOG_SCOPES as readonly string[]).includes(scope)
+        ? (scope as CatalogScope)
+        : "all",
+      productType: typeFilter === ALL_TYPES ? null : typeFromValue(typeFilter),
+      collectionId: collectionFilter?.id ?? null,
+      search: debouncedSearch,
+    }),
+    [scope, typeFilter, collectionFilter, debouncedSearch]
   );
+
+  // Trang đang xem và lựa chọn gắn với bộ lọc: đổi bộ lọc thì về trang 1 và bỏ
+  // chọn, không giữ sản phẩm merchant không còn thấy trên bảng.
+  const [bulkState, setBulkState] = useState(() => initialBulkState(catalogFilter));
+  const bulk = bulkState.filter === catalogFilter ? bulkState : initialBulkState(catalogFilter);
+  const updateBulk = (update: (current: BulkState) => Partial<BulkState>) =>
+    setBulkState((stored) => {
+      const current = stored.filter === catalogFilter ? stored : initialBulkState(catalogFilter);
+      return { ...current, ...update(current) };
+    });
+  const selectAllMatching = bulk.allMatching;
+  const selectedProductIds = useMemo(() => [...bulk.selectedIds], [bulk.selectedIds]);
+
+  const products = useQuery<StudioProductsResponse, Error>(
+    ["catalogProducts", catalogFilter, bulk.page],
+    () =>
+      fetchJson<StudioProductsResponse>(
+        studioProductsUrl(catalogFilter, bulk.page, PRODUCTS_PAGE_SIZE)
+      ),
+    // Ảnh mới từ webhook và kết quả publish chạy nền chỉ thấy được nhờ polling;
+    // mỗi lần chỉ tải một trang nên nhẹ.
+    { refetchOnWindowFocus: false, keepPreviousData: true, refetchInterval: 10_000 }
+  );
+  const pageProducts = useMemo(() => products.data?.products ?? [], [products.data]);
+  const pageIds = useMemo(() => pageProducts.map((product) => product.id), [pageProducts]);
+  // Dữ liệu cũ của bộ lọc trước (đang tải bộ lọc mới) không được dùng để tạo batch.
+  const productsCurrent = products.data !== undefined && !products.isPreviousData;
+  const matchingCount = products.data?.total ?? 0;
+  const productPageCount = Math.max(1, Math.ceil(matchingCount / PRODUCTS_PAGE_SIZE));
+
+  // Sản phẩm rời khỏi bộ lọc (ví dụ vừa được watermark) có thể làm mất trang cuối.
+  useEffect(() => {
+    if (productsCurrent && bulk.page > productPageCount) {
+      updateBulk(() => ({ page: productPageCount }));
+    }
+  }, [productsCurrent, bulk.page, productPageCount]);
 
   const productTypes = useQuery<ProductTypesResponse, Error>(
     ["catalogProductTypes"],
@@ -320,10 +409,22 @@ export function UnifiedWatermarkStudio() {
     { refetchOnWindowFocus: false }
   );
 
+  // Collection chỉ có trên Shopify; thành viên collection hỏi trực tiếp Shopify,
+  // không lưu trong catalog.
+  const collections = useQuery<CollectionsResponse, Error>(
+    ["catalogCollections", collectionQuery],
+    () =>
+      fetchJson<CollectionsResponse>(
+        `/api/catalog/collections?query=${encodeURIComponent(collectionQuery)}`
+      ),
+    { enabled: isShopify, refetchOnWindowFocus: false, keepPreviousData: true }
+  );
+
   const syncStatus = useQuery<CatalogSyncState, Error>(
     ["catalogSyncStatus"],
     () => fetchJson<CatalogSyncState>("/api/catalog/sync"),
     {
+      enabled: isShopify,
       refetchOnWindowFocus: false,
       refetchInterval: (state) => (state?.status === "RUNNING" ? 2_000 : false),
     }
@@ -344,110 +445,69 @@ export function UnifiedWatermarkStudio() {
   );
 
   const jobs = useQuery<JobsResponse, Error>(
-    ["watermarkJobs"],
-    () => fetchJson<JobsResponse>("/api/watermarks/jobs"),
-    {
-      refetchOnWindowFocus: false,
-      refetchInterval: 5_000,
-    }
+    ["watermarkJobs", historyPage],
+    () =>
+      fetchJson<JobsResponse>(
+        `/api/watermarks/jobs?page=${historyPage}&pageSize=${HISTORY_PAGE_SIZE}`
+      ),
+    // Kết quả xử lý và publish chạy nền nên vẫn polling, nhưng chỉ trang đang xem.
+    { refetchOnWindowFocus: false, keepPreviousData: true, refetchInterval: 5_000 }
   );
-
-  const publications = useQuery<PublicationsResponse, Error>(
-    ["publishedMedia"],
-    () => fetchJson<PublicationsResponse>("/api/publications"),
-    // publish-all chạy nền qua BullMQ nên cần polling để thấy kết quả.
-    { refetchOnWindowFocus: false, refetchInterval: 5_000 }
+  const historyPageCount = Math.max(
+    1,
+    Math.ceil((jobs.data?.total ?? 0) / HISTORY_PAGE_SIZE)
   );
-
-  const publishedByProductId = useMemo(() => {
-    const map = new Map<string, PublishedMediaDto>();
-    for (const p of publications.data?.publications ?? []) {
-      map.set(p.productId, p);
-    }
-    return map;
-  }, [publications.data]);
-
-  // Products with valid images
-  const productsWithImage = useMemo(
-    () => (catalog.data?.products ?? []).filter((p) => p.imageUrl),
-    [catalog.data]
-  );
-
-  // Filtered products for bulk selection
-  const eligibleProducts = useMemo(() => {
-    const normalizedSearch = search.trim().toLocaleLowerCase("vi");
-    return productsWithImage
-      .filter((product) => {
-        if (scope === "review") return product.needsReview;
-        if (scope === "unwatermarked")
-          return !publishedByProductId.has(product.id) && !product.imageUrl?.includes("/wm-");
-        if (scope === "watermarked")
-          return publishedByProductId.has(product.id) || product.imageUrl?.includes("/wm-");
-        return true;
-      })
-      .filter(
-        (product) =>
-          typeFilter === ALL_TYPES ||
-          typeValue(product.productType) === typeFilter
-      )
-      .filter(
-        (product) =>
-          !normalizedSearch ||
-          product.title.toLocaleLowerCase("vi").includes(normalizedSearch)
-      )
-      .slice(0, 1_000);
-  }, [productsWithImage, scope, search, typeFilter, publishedByProductId]);
-
-  const {
-    selectedResources,
-    allResourcesSelected,
-    handleSelectionChange,
-    clearSelection,
-  } = useIndexResourceState(eligibleProducts, {
-    resourceIDResolver: (product) => product.id,
-  });
-
-  const visibleIds = useMemo(
-    () => new Set(eligibleProducts.map((p) => p.id)),
-    [eligibleProducts]
-  );
-  const selectedProductIds = useMemo(
-    () => selectedResources.filter((id) => visibleIds.has(id)),
-    [selectedResources, visibleIds]
-  );
-
-  // Initialize preview and single product selections
   useEffect(() => {
-    if (!previewProductId && productsWithImage[0]) {
-      setPreviewProductId(productsWithImage[0].id);
+    if (jobs.data && !jobs.isPreviousData && historyPage > historyPageCount) {
+      setHistoryPage(historyPageCount);
     }
-    if (!singleProductId && productsWithImage[0]) {
-      setSingleProductId(productsWithImage[0].id);
-    }
-  }, [previewProductId, singleProductId, productsWithImage]);
+  }, [jobs.data, jobs.isPreviousData, historyPage, historyPageCount]);
 
-  // Keep preview product updated when user selects in bulk or single
-  const activePreviewProduct = useMemo(() => {
-    if (selectedTab === 1 && singleProductId) {
-      return productsWithImage.find((p) => p.id === singleProductId) ?? null;
-    }
-    if (selectedProductIds.length > 0) {
-      return (
-        productsWithImage.find((p) => p.id === selectedProductIds[0]) ?? null
-      );
-    }
-    return (
-      productsWithImage.find((p) => p.id === previewProductId) ??
-      productsWithImage[0] ??
-      null
-    );
-  }, [
-    selectedTab,
-    singleProductId,
-    selectedProductIds,
-    previewProductId,
-    productsWithImage,
-  ]);
+  // Job đơn lẻ vừa tạo: hỏi riêng job đó thay vì dò trong lịch sử (có thể đang ở trang khác).
+  const activeSingleJob = useQuery<JobResponse, Error>(
+    ["watermarkJob", activeSingleJobId],
+    () =>
+      fetchJson<JobResponse>(
+        `/api/watermarks/jobs/${encodeURIComponent(activeSingleJobId ?? "")}`
+      ),
+    { enabled: activeSingleJobId !== null, refetchOnWindowFocus: false, refetchInterval: 1_500 }
+  );
+
+  // Bản mới nhất của sản phẩm đang xem nếu nó nằm trên trang hiện tại.
+  const freshFocusedProduct = focusedProduct
+    ? pageProducts.find((product) => product.id === focusedProduct.id) ?? focusedProduct
+    : null;
+  const singleProduct = freshFocusedProduct ?? pageProducts[0] ?? null;
+
+  // Đang tick sản phẩm ở tab hàng loạt thì xem mẫu sản phẩm tick đầu tiên trên trang.
+  const activePreviewProduct =
+    (selectedTab === 0
+      ? pageProducts.find((product) => bulk.selectedIds.has(product.id))
+      : undefined) ?? singleProduct;
+
+  const handleSelectionChange = (
+    selectionType: IndexTableSelectionType,
+    selecting: boolean,
+    selection?: string | [number, number]
+  ) =>
+    updateBulk((current) => {
+      // Đang "chọn tất cả khớp bộ lọc" mà tick tay: bắt đầu từ các dòng đang thấy.
+      const next = new Set(current.allMatching ? pageIds : current.selectedIds);
+      const changed =
+        selectionType === IndexTableSelectionType.Single && typeof selection === "string"
+          ? [selection]
+          : selectionType === IndexTableSelectionType.Multi && Array.isArray(selection)
+            ? pageIds.slice(selection[0], selection[1] + 1)
+            : pageIds;
+      for (const id of changed) {
+        if (selecting) next.add(id);
+        else next.delete(id);
+      }
+      return { selectedIds: next, allMatching: false };
+    });
+  const clearBulkSelection = () =>
+    updateBulk(() => ({ selectedIds: new Set<string>(), allMatching: false }));
+  const pageSelectedCount = pageIds.filter((id) => bulk.selectedIds.has(id)).length;
 
   // Kiểm tra bằng đúng domain của backend để UI và server cùng một luật.
   const designError = useMemo(() => {
@@ -482,9 +542,9 @@ export function UnifiedWatermarkStudio() {
             }
           );
           updateLayer(targetLayerId, { logoUrl: res.url });
-          shopify.toast.show("Đã tải logo lên thành công");
+          toast.show("Đã tải logo lên thành công");
         } catch (err: unknown) {
-          shopify.toast.show(
+          toast.show(
             `Không tải được logo: ${
               err instanceof Error ? err.message : String(err)
             }`,
@@ -507,11 +567,23 @@ export function UnifiedWatermarkStudio() {
     {
       onSuccess: () => syncStatus.refetch(),
       onError: (err) =>
-        shopify.toast.show(`Đồng bộ thất bại: ${err.message}`, {
+        toast.show(`Đồng bộ thất bại: ${err.message}`, {
           isError: true,
         }),
     }
   );
+
+  // Shop chưa từng đồng bộ catalog (chỉ có sản phẩm đến lẻ tẻ qua webhook, có thể
+  // thiếu rất nhiều): tự đồng bộ toàn bộ lần đầu mở app.
+  const autoSyncRequested = useRef(false);
+  useEffect(() => {
+    const state = syncStatus.data;
+    if (!isShopify || !state || autoSyncRequested.current) return;
+    if (state.status !== "IDLE" || state.syncId !== null) return;
+    autoSyncRequested.current = true;
+    syncCatalog.mutate();
+    toast.show("Đang đồng bộ catalog lần đầu từ Shopify...");
+  }, [syncStatus.data, syncCatalog, toast]);
 
   const watchedSyncId = useRef<string | null>(null);
   useEffect(() => {
@@ -525,16 +597,16 @@ export function UnifiedWatermarkStudio() {
     watchedSyncId.current = null;
 
     if (state.status === "COMPLETED") {
-      void catalog.refetch();
+      void queryClient.invalidateQueries(["catalogProducts"]);
       void queryClient.invalidateQueries(["catalogProductTypes"]);
-      shopify.toast.show(`Đã đồng bộ ${state.syncedCount} sản phẩm`);
+      toast.show(`Đã đồng bộ ${state.syncedCount} sản phẩm`);
     } else if (state.status === "FAILED") {
-      shopify.toast.show(
+      toast.show(
         `Đồng bộ thất bại: ${state.error ?? "Lỗi không rõ"}`,
         { isError: true }
       );
     }
-  }, [syncStatus.data, catalog, queryClient, shopify]);
+  }, [syncStatus.data, queryClient, toast]);
 
   // --- Single Watermark Creation Mutation ---
   const createSingleJob = useMutation<JobResponse, Error>(
@@ -543,7 +615,7 @@ export function UnifiedWatermarkStudio() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          productId: singleProductId,
+          productId: singleProduct?.id,
           layers: toPayload(layers),
         }),
       });
@@ -552,10 +624,10 @@ export function UnifiedWatermarkStudio() {
       onSuccess: ({ job }) => {
         setActiveSingleJobId(job.id);
         void queryClient.invalidateQueries(["watermarkJobs"]);
-        shopify.toast.show("Đã tạo yêu cầu, đang xử lý watermark ngầm...");
+        toast.show("Đã tạo yêu cầu, đang xử lý watermark ngầm...");
       },
       onError: (err) => {
-        shopify.toast.show(`Tạo watermark thất bại: ${err.message}`, {
+        toast.show(`Tạo watermark thất bại: ${err.message}`, {
           isError: true,
         });
       },
@@ -565,14 +637,15 @@ export function UnifiedWatermarkStudio() {
   // Monitor single job completion
   useEffect(() => {
     if (!activeSingleJobId) return;
-    const targetJob = jobs.data?.jobs.find((j) => j.id === activeSingleJobId);
-    if (!targetJob) return;
+    const targetJob = activeSingleJob.data?.job;
+    if (targetJob?.id !== activeSingleJobId) return;
 
     if (targetJob.status === "COMPLETED") {
-      shopify.toast.show("Đã xử lý xong ảnh watermark");
+      void queryClient.invalidateQueries(["watermarkJobs"]);
+      toast.show("Đã xử lý xong ảnh watermark");
       setActiveSingleJobId(null);
     } else if (targetJob.status === "FAILED") {
-      shopify.toast.show(
+      toast.show(
         `Xử lý watermark thất bại: ${
           targetJob.errorMessage ?? "Lỗi không xác định"
         }`,
@@ -580,13 +653,18 @@ export function UnifiedWatermarkStudio() {
       );
       setActiveSingleJobId(null);
     }
-  }, [jobs.data, activeSingleJobId, shopify]);
+  }, [activeSingleJob.data, activeSingleJobId, queryClient, toast]);
 
   // --- Bulk Watermark Batch Creation Mutation ---
   const createBatch = useMutation<
     CreateBatchResponse,
     Error,
-    { productIds?: string[]; productType?: string }
+    {
+      productIds?: string[];
+      productType?: string;
+      collectionId?: string;
+      filter?: CatalogFilter;
+    }
   >(
     async (selection) => {
       return await fetchJson<CreateBatchResponse>("/api/watermarks/batches", {
@@ -599,21 +677,28 @@ export function UnifiedWatermarkStudio() {
       });
     },
     {
-      onSuccess: async ({ batch }) => {
-        clearSelection();
+      onSuccess: async ({ batch, batches }) => {
+        clearBulkSelection();
         await Promise.all([
           queryClient.invalidateQueries(["watermarkBatches"]),
           queryClient.invalidateQueries(["watermarkJobs"]),
           queryClient.invalidateQueries(["catalogProducts"]),
         ]);
-        shopify.toast.show(
-          batch.skippedProducts > 0
-            ? `Đã tạo batch ${batch.totalJobs} ảnh, bỏ qua ${batch.skippedProducts} sản phẩm không có ảnh`
-            : `Đã tạo batch ${batch.totalJobs} ảnh, đang xử lý ngầm`
+        const created = batches ?? [batch];
+        const totalJobs = created.reduce((sum, item) => sum + item.totalJobs, 0);
+        const skipped = created.reduce((sum, item) => sum + item.skippedProducts, 0);
+        const summary =
+          created.length > 1
+            ? `Đã tạo ${created.length} batch, tổng ${totalJobs.toLocaleString("vi-VN")} ảnh`
+            : `Đã tạo batch ${totalJobs.toLocaleString("vi-VN")} ảnh`;
+        toast.show(
+          skipped > 0
+            ? `${summary}, bỏ qua ${skipped} sản phẩm chưa đồng bộ hoặc không có ảnh`
+            : `${summary}, đang xử lý ngầm`
         );
       },
       onError: (error) => {
-        shopify.toast.show(`Không tạo được batch: ${error.message}`, {
+        toast.show(`Không tạo được batch: ${error.message}`, {
           isError: true,
         });
       },
@@ -631,14 +716,21 @@ export function UnifiedWatermarkStudio() {
     {
       onSuccess: () => {
         void queryClient.invalidateQueries(["watermarkBatches"]);
-        shopify.toast.show("Đã hủy các ảnh còn đang chờ trong batch");
+        toast.show("Đã hủy các ảnh còn đang chờ trong batch");
       },
       onError: (err) =>
-        shopify.toast.show(`Không hủy được batch: ${err.message}`, {
+        toast.show(`Không hủy được batch: ${err.message}`, {
           isError: true,
         }),
     }
   );
+
+  // Sản phẩm chọn qua ô tìm kiếm không nằm trên trang hiện tại nên không được
+  // polling làm mới: cập nhật tay trạng thái watermark sau thao tác của chính merchant.
+  const markFocusedWatermarked = (productId: string, isWatermarked: boolean) =>
+    setFocusedProduct((current) =>
+      current?.id === productId ? { ...current, isWatermarked } : current
+    );
 
   // --- Publish to Shopify Mutation ---
   const publishToShopify = useMutation<PublishedMediaDto, Error, WatermarkJobDto>(
@@ -648,13 +740,14 @@ export function UnifiedWatermarkStudio() {
         { method: "POST" }
       ),
     {
-      onSuccess: () => {
-        void queryClient.invalidateQueries(["publishedMedia"]);
+      onSuccess: (_published, job) => {
+        markFocusedWatermarked(job.productId, true);
+        void queryClient.invalidateQueries(["watermarkJobs"]);
         void queryClient.invalidateQueries(["catalogProducts"]);
-        shopify.toast.show("Đã đặt làm ảnh chính trên Shopify");
+        toast.show("Đã đặt làm ảnh chính trên Shopify");
       },
       onError: (err) =>
-        shopify.toast.show(`Không đưa được lên Shopify: ${err.message}`, {
+        toast.show(`Không đưa được lên Shopify: ${err.message}`, {
           isError: true,
         }),
     }
@@ -669,12 +762,12 @@ export function UnifiedWatermarkStudio() {
       ),
     {
       onSuccess: () => {
-        void queryClient.invalidateQueries(["publishedMedia"]);
+        void queryClient.invalidateQueries(["watermarkJobs"]);
         void queryClient.invalidateQueries(["catalogProducts"]);
-        shopify.toast.show("Đã khôi phục ảnh gốc trên Shopify thành công");
+        toast.show("Đã khôi phục ảnh gốc trên Shopify thành công");
       },
       onError: (err) =>
-        shopify.toast.show(`Không khôi phục được ảnh: ${err.message}`, {
+        toast.show(`Không khôi phục được ảnh: ${err.message}`, {
           isError: true,
         }),
     }
@@ -688,61 +781,103 @@ export function UnifiedWatermarkStudio() {
         { method: "POST" }
       ),
     {
-      onSuccess: () => {
-        void queryClient.invalidateQueries(["publishedMedia"]);
+      onSuccess: (_result, productId) => {
+        markFocusedWatermarked(productId, false);
+        void queryClient.invalidateQueries(["watermarkJobs"]);
         void queryClient.invalidateQueries(["catalogProducts"]);
-        shopify.toast.show("Đã khôi phục ảnh gốc trên Shopify thành công");
+        toast.show("Đã khôi phục ảnh gốc trên Shopify thành công");
       },
       onError: (err) =>
-        shopify.toast.show(`Không khôi phục được ảnh: ${err.message}`, {
+        toast.show(`Không khôi phục được ảnh: ${err.message}`, {
           isError: true,
         }),
     }
   );
 
-  // --- Restore All Products Original Images Mutation ---
-  const restoreAllProducts = useMutation<SuccessResponse, Error, void>(
+  // --- Restore All Products Original Images Mutation (chạy nền trên server) ---
+  const restoreAllProducts = useMutation<{ success: boolean; queuedCount: number }, Error, void>(
     () =>
-      fetchJson<SuccessResponse>("/api/publications/restore-all", {
+      fetchJson<{ success: boolean; queuedCount: number }>("/api/publications/restore-all", {
         method: "POST",
       }),
     {
-      onSuccess: () => {
-        void queryClient.invalidateQueries(["publishedMedia"]);
+      onSuccess: ({ queuedCount }) => {
+        void queryClient.invalidateQueries(["watermarkJobs"]);
         void queryClient.invalidateQueries(["catalogProducts"]);
-        shopify.toast.show("Đã khôi phục toàn bộ ảnh gốc trên Shopify");
+        toast.show(
+          queuedCount > 0
+            ? `Đang khôi phục ảnh gốc cho ${queuedCount.toLocaleString("vi-VN")} sản phẩm (chạy ngầm)`
+            : "Không có sản phẩm nào đang có ảnh watermark"
+        );
       },
       onError: (err) =>
-        shopify.toast.show(`Không thể khôi phục tất cả: ${err.message}`, {
+        toast.show(`Không thể khôi phục tất cả: ${err.message}`, {
           isError: true,
         }),
+    }
+  );
+
+  // --- Khôi phục ảnh gốc các sản phẩm đã chọn (chạy nền trên server) ---
+  const restoreSelected = useMutation<RestoreSelectedResponse, Error, void>(
+    () =>
+      fetchJson<RestoreSelectedResponse>("/api/publications/products/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          selectAllMatching ? { filter: catalogFilter } : { productIds: selectedProductIds }
+        ),
+      }),
+    {
+      onSuccess: ({ queuedCount, skippedCount }) => {
+        clearBulkSelection();
+        void queryClient.invalidateQueries(["catalogProducts"]);
+        void queryClient.invalidateQueries(["watermarkJobs"]);
+        const skipped =
+          skippedCount > 0 ? `, bỏ qua ${skippedCount} ${ITEM} không có watermark` : "";
+        toast.show(
+          queuedCount > 0
+            ? `Đang khôi phục ảnh gốc cho ${queuedCount.toLocaleString("vi-VN")} ${ITEM} (chạy ngầm)${skipped}`
+            : `Các ${ITEM} đã chọn không có ảnh watermark nào để khôi phục`
+        );
+      },
+      onError: (err) =>
+        toast.show(`Không khôi phục được: ${err.message}`, { isError: true }),
     }
   );
 
   // --- Bulk Publish Batch Mutation ---
   const publishBatch = useMutation<
-    { success: boolean; queuedCount: number },
+    { success: boolean; queuedCount: number; pendingCount?: number },
     Error,
     string
   >(
     (batchId) =>
-      fetchJson<{ success: boolean; queuedCount: number }>(
+      fetchJson<{ success: boolean; queuedCount: number; pendingCount?: number }>(
         `/api/publications/batches/${encodeURIComponent(batchId)}/publish-all`,
         { method: "POST" }
       ),
     {
       onSuccess: (data) => {
-        void queryClient.invalidateQueries(["publishedMedia"]);
+        void queryClient.invalidateQueries(["watermarkJobs"]);
         void queryClient.invalidateQueries(["catalogProducts"]);
         void queryClient.invalidateQueries(["watermarkBatches"]);
-        shopify.toast.show(
-          data.queuedCount > 0
-            ? `Đã đưa ${data.queuedCount} ảnh vào hàng đợi xuất bản lên Shopify`
+        const parts = [
+          ...(data.queuedCount > 0
+            ? [`Đã đưa ${data.queuedCount} ảnh vào hàng đợi xuất bản lên Shopify`]
+            : []),
+          // Server ghi nhận yêu cầu trên batch: ảnh xong sau lúc bấm cũng tự publish.
+          ...(data.pendingCount
+            ? [`${data.pendingCount} ảnh còn đang xử lý sẽ tự xuất bản khi xong`]
+            : []),
+        ];
+        toast.show(
+          parts.length > 0
+            ? parts.join("; ")
             : "Không còn ảnh nào cần xuất bản trong batch này"
         );
       },
       onError: (err) =>
-        shopify.toast.show(`Không thể xuất bản: ${err.message}`, {
+        toast.show(`Không thể xuất bản: ${err.message}`, {
           isError: true,
         }),
     }
@@ -758,15 +893,37 @@ export function UnifiedWatermarkStudio() {
     {
       onSuccess: (data) => {
         const mb = (data.freedBytes / (1024 * 1024)).toFixed(2);
-        shopify.toast.show(
+        toast.show(
           `Đã giải phóng ${mb} MB (${data.deletedAssetsCount} file tạm trên server)!`
         );
       },
       onError: (err: unknown) =>
-        shopify.toast.show(
+        toast.show(
           `Lỗi dọn dẹp: ${err instanceof Error ? err.message : String(err)}`,
           { isError: true }
         ),
+    }
+  );
+
+  // --- Chế độ độc lập: xóa ảnh đã tải lên ---
+  const refreshUploadedImages = () => {
+    void queryClient.invalidateQueries(["catalogProducts"]);
+    void queryClient.invalidateQueries(["catalogProductTypes"]);
+  };
+
+  const removeImage = useMutation<SuccessResponse, Error, string>(
+    (productId) =>
+      fetchJson<SuccessResponse>(
+        `/api/standalone/images/${encodeURIComponent(productId)}`,
+        { method: "DELETE" }
+      ),
+    {
+      onSuccess: () => {
+        refreshUploadedImages();
+        toast.show("Đã xóa ảnh");
+      },
+      onError: (err) =>
+        toast.show(`Không xóa được ảnh: ${err.message}`, { isError: true }),
     }
   );
 
@@ -788,10 +945,10 @@ export function UnifiedWatermarkStudio() {
         setSelectedTemplateId(template.id);
         setShowSaveTemplateModal(false);
         setNewTemplateName("");
-        shopify.toast.show(`Đã lưu mẫu "${template.name}" thành công!`);
+        toast.show(`Đã lưu mẫu "${template.name}" thành công!`);
       },
       onError: (err: unknown) =>
-        shopify.toast.show(
+        toast.show(
           `Lỗi lưu mẫu: ${err instanceof Error ? err.message : String(err)}`,
           { isError: true }
         ),
@@ -808,10 +965,10 @@ export function UnifiedWatermarkStudio() {
       onSuccess: () => {
         void queryClient.invalidateQueries(["watermarkTemplates"]);
         setSelectedTemplateId("");
-        shopify.toast.show("Đã xóa mẫu watermark");
+        toast.show("Đã xóa mẫu watermark");
       },
       onError: (err: unknown) =>
-        shopify.toast.show(
+        toast.show(
           `Lỗi xóa mẫu: ${err instanceof Error ? err.message : String(err)}`,
           { isError: true }
         ),
@@ -830,7 +987,7 @@ export function UnifiedWatermarkStudio() {
         .toJSON()
         .layers.map((layer) => ({ ...layer, id: newLayerId() }));
     } catch (error) {
-      shopify.toast.show(
+      toast.show(
         `Không áp dụng được mẫu: ${error instanceof Error ? error.message : String(error)}`,
         { isError: true }
       );
@@ -838,7 +995,7 @@ export function UnifiedWatermarkStudio() {
     }
     setLayers(loaded);
     setSelectedLayerId(loaded[0].id);
-    shopify.toast.show(`Đã áp dụng mẫu "${tmpl.name}"`);
+    toast.show(`Đã áp dụng mẫu "${tmpl.name}"`);
   };
 
   const selectedType =
@@ -850,7 +1007,14 @@ export function UnifiedWatermarkStudio() {
 
   const canCreateBatch =
     selectedProductIds.length > 0 &&
-    selectedProductIds.length <= 1_000 &&
+    selectedProductIds.length <= MAX_MANUAL_SELECTION &&
+    configurationValid;
+
+  const filterBatchCount = Math.ceil(matchingCount / FILTER_BATCH_SIZE);
+  const canCreateForFilter =
+    productsCurrent &&
+    matchingCount > 0 &&
+    matchingCount <= MAX_FILTER_JOBS &&
     configurationValid;
 
   const canCreateForType =
@@ -859,32 +1023,84 @@ export function UnifiedWatermarkStudio() {
     selectedType.withImageCount <= 5_000 &&
     configurationValid;
 
-  const publishedJobIds = useMemo(
-    () => new Set((publications.data?.publications ?? []).map((p) => p.watermarkJobId)),
-    [publications.data]
-  );
+  // Sản phẩm có ảnh trong catalog thuộc collection: đúng số job server sẽ tạo.
+  const collectionWithImageCount = productsCurrent
+    ? products.data?.collectionCount ?? null
+    : null;
+  const canCreateForCollection =
+    collectionFilter !== null &&
+    collectionWithImageCount !== null &&
+    collectionWithImageCount > 0 &&
+    collectionWithImageCount <= 5_000 &&
+    configurationValid;
 
-  const reviewCount = productsWithImage.filter((p) => p.needsReview).length;
+  const reviewCount = products.data?.reviewCount ?? 0;
   const isSyncing =
     syncCatalog.isLoading || syncStatus.data?.status === "RUNNING";
 
+  // Khôi phục dùng chung lựa chọn với tab hàng loạt (cùng bảng, cùng bộ lọc).
+  const selectedCount = selectAllMatching ? matchingCount : selectedProductIds.length;
+  const canRestoreSelected = selectAllMatching
+    ? productsCurrent && matchingCount > 0
+    : selectedProductIds.length > 0 && selectedProductIds.length <= MAX_MANUAL_SELECTION;
+  const restoreSelectedButton = (
+    <Button
+      destructive
+      loading={restoreSelected.isLoading}
+      disabled={!canRestoreSelected || restoreSelected.isLoading}
+      onClick={() => restoreSelected.mutate()}
+    >
+      {selectedCount > 0
+        ? `Khôi phục ảnh gốc ${selectedCount.toLocaleString("vi-VN")} ${ITEM} đã chọn`
+        : `Khôi phục ảnh gốc (chọn ${ITEM} ở dưới)`}
+    </Button>
+  );
+
+  const selectionBar = (
+    <Stack distribution="equalSpacing" alignment="center">
+      <Text as="span" variant="bodyMd" fontWeight="semibold">
+        {selectAllMatching
+          ? `Đã chọn tất cả ${matchingCount.toLocaleString("vi-VN")} ${ITEM} khớp bộ lọc`
+          : `Đã chọn ${selectedProductIds.length.toLocaleString("vi-VN")} / ${matchingCount.toLocaleString("vi-VN")} ${ITEM}`}
+      </Text>
+      <ButtonGroup>
+        <Button
+          size="slim"
+          disabled={!productsCurrent || matchingCount === 0 || selectAllMatching}
+          onClick={() => updateBulk(() => ({ allMatching: true }))}
+        >
+          {`Chọn tất cả ${matchingCount.toLocaleString("vi-VN")} ${ITEM} khớp bộ lọc`}
+        </Button>
+        <Button
+          size="slim"
+          disabled={!selectAllMatching && selectedProductIds.length === 0}
+          onClick={clearBulkSelection}
+        >
+          Bỏ chọn
+        </Button>
+      </ButtonGroup>
+    </Stack>
+  );
+  const filterActive =
+    catalogFilter.scope !== "all" ||
+    catalogFilter.productType !== null ||
+    catalogFilter.collectionId !== null ||
+    catalogFilter.search.trim() !== "";
+
   // Bulk table rows
-  const bulkRows = eligibleProducts.map((product, index) => {
-    const publishedInfo = publishedByProductId.get(product.id);
-    const isWatermarked = Boolean(
-      publishedInfo || product.imageUrl?.includes("/wm-")
-    );
+  const bulkRows = pageProducts.map((product, index) => {
+    const isWatermarked = product.isWatermarked;
     return (
       <IndexTable.Row
         id={product.id}
         key={product.id}
         position={index}
-        selected={selectedResources.includes(product.id)}
+        selected={selectAllMatching || bulk.selectedIds.has(product.id)}
       >
         <IndexTable.Cell>
           <Stack spacing="tight" alignment="center">
             <Thumbnail
-              source={product.imageUrl!}
+              source={product.imageUrl}
               alt={product.imageAltText ?? product.title}
               size="small"
             />
@@ -896,7 +1112,9 @@ export function UnifiedWatermarkStudio() {
         <IndexTable.Cell>
           <Stack spacing="extraTight">
             {isWatermarked && <Badge status="info">Đang có watermark</Badge>}
-            {product.needsReview ? (
+            {!isShopify ? (
+              <Badge>{product.productType || "Ảnh tải lên"}</Badge>
+            ) : product.needsReview ? (
               <Badge status="attention">Ảnh mới – cần duyệt</Badge>
             ) : (
               <Badge status="success">{`Đã đồng bộ (v${product.sourceVersion})`}</Badge>
@@ -904,33 +1122,45 @@ export function UnifiedWatermarkStudio() {
           </Stack>
         </IndexTable.Cell>
         <IndexTable.Cell>
-          <Stack spacing="extraTight" alignment="center">
-            <Button
-              plain
-              size="slim"
-              onClick={() => {
-                setPreviewProductId(product.id);
-                setSingleProductId(product.id);
-              }}
-            >
-              Xem mẫu
-            </Button>
-            {isWatermarked && (
+          {/* Bấm nút trong dòng không được tick/bỏ tick dòng (click nổi lên tới Row). */}
+          <div onClick={(event) => event.stopPropagation()}>
+            <Stack spacing="extraTight" alignment="center">
               <Button
                 plain
-                destructive
                 size="slim"
-                loading={
-                  restoreProduct.isLoading &&
-                  restoreProduct.variables === product.id
-                }
-                disabled={restoreProduct.isLoading}
-                onClick={() => restoreProduct.mutate(product.id)}
+                onClick={() => setFocusedProduct(product)}
               >
-                Khôi phục gốc
+                Xem mẫu
               </Button>
-            )}
-          </Stack>
+              {!isShopify && (
+                <Button
+                  plain
+                  destructive
+                  size="slim"
+                  loading={removeImage.isLoading && removeImage.variables === product.id}
+                  disabled={removeImage.isLoading}
+                  onClick={() => removeImage.mutate(product.id)}
+                >
+                  Xóa ảnh
+                </Button>
+              )}
+              {isShopify && isWatermarked && (
+                <Button
+                  plain
+                  destructive
+                  size="slim"
+                  loading={
+                    restoreProduct.isLoading &&
+                    restoreProduct.variables === product.id
+                  }
+                  disabled={restoreProduct.isLoading}
+                  onClick={() => restoreProduct.mutate(product.id)}
+                >
+                  Khôi phục gốc
+                </Button>
+              )}
+            </Stack>
+          </div>
         </IndexTable.Cell>
       </IndexTable.Row>
     );
@@ -959,7 +1189,7 @@ export function UnifiedWatermarkStudio() {
       </div>,
       batchStatusBadge(batch.status),
       <Stack key={`${batch.id}-actions`} spacing="extraTight" alignment="center">
-        {batch.completedJobs > 0 && (
+        {isShopify && batch.completedJobs > 0 && (
           <Button
             primary
             size="slim"
@@ -980,7 +1210,9 @@ export function UnifiedWatermarkStudio() {
             Hủy
           </Button>
         )}
-        {batch.completedJobs === 0 && batch.status !== "QUEUED" && batch.status !== "RUNNING" && (
+        {(!isShopify || batch.completedJobs === 0) &&
+          batch.status !== "QUEUED" &&
+          batch.status !== "RUNNING" && (
           <Text as="span" variant="bodySm" color="subdued">—</Text>
         )}
       </Stack>,
@@ -989,9 +1221,8 @@ export function UnifiedWatermarkStudio() {
 
   // History job rows
   const jobRows = (jobs.data?.jobs ?? []).map((job) => {
-    const matchedProduct = productsWithImage.find((p) => p.id === job.productId);
-    const title = matchedProduct?.title ?? job.productId;
-    const isJobPublished = publishedJobIds.has(job.id);
+    const title = job.productTitle;
+    const isJobPublished = job.published;
 
     return [
       new Intl.DateTimeFormat("vi-VN", {
@@ -1001,7 +1232,17 @@ export function UnifiedWatermarkStudio() {
       title,
       job.summary || "—",
       jobStatusBadge(job.status),
-      job.resultUrl ? (
+      job.resultUrl && !isShopify ? (
+        <Stack key={`${job.id}-actions`} spacing="tight" alignment="center">
+          <Button plain url={job.resultUrl} external>
+            Xem ảnh
+          </Button>
+          {/* SharpWatermarkProcessor luôn xuất WebP. */}
+          <Button size="slim" url={job.resultUrl} external download={`${title}-watermark.webp`}>
+            Tải về
+          </Button>
+        </Stack>
+      ) : job.resultUrl ? (
         <Stack key={`${job.id}-actions`} vertical spacing="extraTight">
           <Button plain url={job.resultUrl} external>
             Xem ảnh
@@ -1057,31 +1298,35 @@ export function UnifiedWatermarkStudio() {
               Watermark Studio
             </Text>
             <Text as="p" variant="bodyMd" color="subdued">
-              Tùy chỉnh watermark và áp dụng cho từng sản phẩm hoặc hàng loạt trên cửa hàng Shopify.
+              {isShopify
+                ? "Tùy chỉnh watermark và áp dụng cho từng sản phẩm hoặc hàng loạt trên cửa hàng Shopify."
+                : "Tải ảnh lên, tùy chỉnh watermark rồi áp dụng cho từng ảnh hoặc hàng loạt và tải kết quả về."}
             </Text>
           </Stack>
-          <Stack spacing="tight" alignment="center">
-            {syncStatus.data?.status === "RUNNING" && (
-              <Text as="span" variant="bodySm" color="subdued">
-                {`Đang đồng bộ... (${syncStatus.data.syncedCount} SP)`}
-              </Text>
-            )}
-            <Button
-              size="slim"
-              loading={cleanupStorageMutation.isLoading}
-              disabled={cleanupStorageMutation.isLoading}
-              onClick={() => cleanupStorageMutation.mutate()}
-            >
-              Dọn dẹp ảnh tạm
-            </Button>
-            <Button
-              loading={isSyncing}
-              disabled={isSyncing}
-              onClick={() => syncCatalog.mutate()}
-            >
-              Đồng bộ catalog từ Shopify
-            </Button>
-          </Stack>
+          {isShopify && (
+            <Stack spacing="tight" alignment="center">
+              {syncStatus.data?.status === "RUNNING" && (
+                <Text as="span" variant="bodySm" color="subdued">
+                  {`Đang đồng bộ... (${syncStatus.data.syncedCount} SP)`}
+                </Text>
+              )}
+              <Button
+                size="slim"
+                loading={cleanupStorageMutation.isLoading}
+                disabled={cleanupStorageMutation.isLoading}
+                onClick={() => cleanupStorageMutation.mutate()}
+              >
+                Dọn dẹp ảnh tạm
+              </Button>
+              <Button
+                loading={isSyncing}
+                disabled={isSyncing}
+                onClick={() => syncCatalog.mutate()}
+              >
+                Đồng bộ catalog từ Shopify
+              </Button>
+            </Stack>
+          )}
         </Stack>
         {reviewCount > 0 && (
           <div style={{ marginTop: "12px" }}>
@@ -1096,6 +1341,8 @@ export function UnifiedWatermarkStudio() {
           </div>
         )}
       </Card>
+
+      {!isShopify && <StandaloneImageUploader onUploaded={refreshUploadedImages} />}
 
       {/* SECTION 1: Cấu hình Watermark & 1 KHUNG XEM TRƯỚC DUY NHẤT (Side-by-side) */}
       <Layout>
@@ -1473,17 +1720,10 @@ export function UnifiedWatermarkStudio() {
           <div style={{ position: "sticky", top: "16px" }}>
             <Card sectioned title="Xem trước trực tiếp (Live Preview)">
               <Stack vertical spacing="tight">
-                <Select
-                  label="Chọn sản phẩm xem mẫu"
-                  options={productsWithImage.map((p) => ({
-                    label: p.title,
-                    value: p.id,
-                  }))}
-                  value={activePreviewProduct?.id ?? ""}
-                  onChange={(val) => {
-                    setPreviewProductId(val);
-                    setSingleProductId(val);
-                  }}
+                <ProductPicker
+                  label={isShopify ? "Chọn sản phẩm xem mẫu" : "Chọn ảnh xem mẫu"}
+                  selected={activePreviewProduct}
+                  onSelect={setFocusedProduct}
                 />
 
                 <div style={{ marginTop: "4px" }}>
@@ -1497,7 +1737,7 @@ export function UnifiedWatermarkStudio() {
                         pressed={!previewWithWatermark}
                         onClick={() => setPreviewWithWatermark(false)}
                       >
-                        Ảnh gốc trên Shopify
+                        {isShopify ? "Ảnh gốc trên Shopify" : "Ảnh gốc"}
                       </Button>
                       <Button
                         size="slim"
@@ -1522,10 +1762,12 @@ export function UnifiedWatermarkStudio() {
                 <Text as="p" variant="bodySm" color="subdued">
                   {previewWithWatermark
                     ? "ℹ️ Đang hiển thị lớp watermark mô phỏng theo cấu hình bên trái."
-                    : "✅ Đang hiển thị ảnh gốc thực tế trên Shopify (không có watermark)."}
+                    : isShopify
+                      ? "✅ Đang hiển thị ảnh gốc thực tế trên Shopify (không có watermark)."
+                      : "✅ Đang hiển thị ảnh gốc bạn đã tải lên (không có watermark)."}
                 </Text>
 
-                {activePreviewProduct && (
+                {isShopify && activePreviewProduct && (
                   <div
                     style={{
                       marginTop: "12px",
@@ -1536,8 +1778,7 @@ export function UnifiedWatermarkStudio() {
                     <Stack distribution="equalSpacing" alignment="center">
                       <Stack spacing="extraTight" vertical>
                         <Text as="span" variant="bodySm" fontWeight="semibold">
-                          {activePreviewProduct.imageUrl?.includes("/wm-") ||
-                          publishedByProductId.has(activePreviewProduct.id)
+                          {activePreviewProduct.isWatermarked
                             ? "Đang có watermark trên Shopify"
                             : "Ảnh hiện tại trên Shopify"}
                         </Text>
@@ -1574,14 +1815,19 @@ export function UnifiedWatermarkStudio() {
             },
             {
               id: "single-tab",
-              content: "Watermark 1 sản phẩm",
+              content: isShopify ? "Watermark 1 sản phẩm" : "Watermark 1 ảnh",
               panelID: "single-panel",
             },
-            {
-              id: "restore-tab",
-              content: "Khôi phục ảnh gốc (Hoàn tác)",
-              panelID: "restore-panel",
-            },
+            // Khôi phục ảnh gốc là thao tác trên cửa hàng Shopify.
+            ...(isShopify
+              ? [
+                  {
+                    id: "restore-tab",
+                    content: "Khôi phục ảnh gốc (Hoàn tác)",
+                    panelID: "restore-panel",
+                  },
+                ]
+              : []),
           ]}
           selected={selectedTab}
           onSelect={setSelectedTab}
@@ -1593,26 +1839,31 @@ export function UnifiedWatermarkStudio() {
             <Stack vertical spacing="loose">
               {/* Filter controls */}
               <Stack distribution="fillEvenly">
-                <Select
-                  label="Bộ lọc sản phẩm"
-                  options={[
-                    { label: "Tất cả sản phẩm có ảnh", value: "all" },
-                    { label: "Chỉ ảnh mới cần duyệt", value: "review" },
-                    { label: "Chưa có watermark", value: "unwatermarked" },
-                    { label: "Đang có watermark", value: "watermarked" },
-                  ]}
-                  value={scope}
-                  onChange={setScope}
-                />
-                <Select
-                  label="Phạm vi ảnh áp dụng"
-                  options={[
-                    { label: "Ảnh đại diện chính (Primary)", value: "PRIMARY" },
-                    { label: "Tất cả ảnh thư viện (Gallery)", value: "ALL" },
-                  ]}
-                  value={targetMediaScope}
-                  onChange={(val) => setTargetMediaScope(val as "PRIMARY" | "ALL")}
-                />
+                {/* Trạng thái duyệt / đã lên Shopify và thư viện ảnh chỉ có ở catalog Shopify. */}
+                {isShopify && (
+                  <Select
+                    label="Bộ lọc sản phẩm"
+                    options={[
+                      { label: "Tất cả sản phẩm có ảnh", value: "all" },
+                      { label: "Chỉ ảnh mới cần duyệt", value: "review" },
+                      { label: "Chưa có watermark", value: "unwatermarked" },
+                      { label: "Đang có watermark", value: "watermarked" },
+                    ]}
+                    value={scope}
+                    onChange={setScope}
+                  />
+                )}
+                {isShopify && (
+                  <Select
+                    label="Phạm vi ảnh áp dụng"
+                    options={[
+                      { label: "Ảnh đại diện chính (Primary)", value: "PRIMARY" },
+                      { label: "Tất cả ảnh thư viện (Gallery)", value: "ALL" },
+                    ]}
+                    value={targetMediaScope}
+                    onChange={(val) => setTargetMediaScope(val as "PRIMARY" | "ALL")}
+                  />
+                )}
                 <Select
                   label="Loại sản phẩm"
                   options={[
@@ -1625,70 +1876,128 @@ export function UnifiedWatermarkStudio() {
                   value={typeFilter}
                   onChange={setTypeFilter}
                 />
+                {isShopify && (
+                  <Autocomplete
+                    options={(collections.data?.collections ?? []).map((collection) => ({
+                      value: collection.id,
+                      label:
+                        collection.productsCount === null
+                          ? collection.title
+                          : `${collection.title} (${collection.productsCount})`,
+                    }))}
+                    selected={collectionFilter ? [collectionFilter.id] : []}
+                    onSelect={([id]) => {
+                      const collection =
+                        collections.data?.collections.find((c) => c.id === id) ?? null;
+                      setCollectionFilter(collection);
+                      setCollectionInput(collection?.title ?? "");
+                    }}
+                    loading={collections.isFetching}
+                    emptyState={
+                      <Text as="p" variant="bodySm" color="subdued">
+                        {collections.isError
+                          ? `Không tải được collection: ${collections.error.message}`
+                          : "Không tìm thấy collection"}
+                      </Text>
+                    }
+                    textField={
+                      <Autocomplete.TextField
+                        label="Collection"
+                        value={collectionInput}
+                        onChange={(value) => {
+                          setCollectionInput(value);
+                          // Sửa chữ nghĩa là đang tìm collection khác: bỏ lọc cũ.
+                          if (collectionFilter && value !== collectionFilter.title) {
+                            setCollectionFilter(null);
+                          }
+                        }}
+                        placeholder="Tất cả collection"
+                        autoComplete="off"
+                        clearButton
+                        onClearButtonClick={() => {
+                          setCollectionInput("");
+                          setCollectionFilter(null);
+                        }}
+                      />
+                    }
+                  />
+                )}
                 <TextField
-                  label="Tìm sản phẩm"
+                  label={`Tìm ${ITEM}`}
                   value={search}
                   autoComplete="off"
                   onChange={setSearch}
-                  placeholder="Nhập tên sản phẩm..."
+                  placeholder={`Nhập tên ${ITEM}...`}
                   clearButton
                   onClearButtonClick={() => setSearch("")}
                 />
               </Stack>
 
-              {/* Selection Bar with Quick Actions */}
-              <Stack distribution="equalSpacing" alignment="center">
-                <Text as="span" variant="bodyMd" fontWeight="semibold">
-                  {`Đã chọn ${selectedProductIds.length.toLocaleString("vi-VN")} / ${eligibleProducts.length.toLocaleString("vi-VN")} sản phẩm`}
+              {selectionBar}
+              {(selectedProductIds.length > MAX_MANUAL_SELECTION || isSyncing) && (
+                <Text as="p" variant="bodySm" color="subdued">
+                  {[
+                    selectedProductIds.length > MAX_MANUAL_SELECTION
+                      ? `Chọn tay tối đa ${MAX_MANUAL_SELECTION.toLocaleString("vi-VN")} ${ITEM} mỗi batch; nhiều hơn thì dùng "Chọn tất cả … khớp bộ lọc".`
+                      : null,
+                    isSyncing
+                      ? "Catalog đang đồng bộ nên số sản phẩm còn tăng; batch lấy đủ sản phẩm có tại lúc bấm tạo."
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                 </Text>
-                <ButtonGroup>
-                  <Button
-                    size="slim"
-                    onClick={() => {
-                      // Select all eligible products
-                      eligibleProducts.forEach((p) => {
-                        if (!selectedResources.includes(p.id)) {
-                          handleSelectionChange("single", true, p.id);
-                        }
-                      });
-                    }}
-                  >
-                    Chọn tất cả danh sách
-                  </Button>
-                  <Button
-                    size="slim"
-                    disabled={selectedProductIds.length === 0}
-                    onClick={clearSelection}
-                  >
-                    Bỏ chọn
-                  </Button>
-                </ButtonGroup>
-              </Stack>
+              )}
+              {products.isError && (
+                <Banner
+                  status="critical"
+                  title={`Không tải được danh sách ${ITEM}: ${products.error.message}`}
+                />
+              )}
 
-              {/* Products Table */}
+              {/* Products Table: mỗi lần một trang từ server; lựa chọn giữ qua các trang */}
               <IndexTable
-                resourceName={{ singular: "sản phẩm", plural: "sản phẩm" }}
-                itemCount={eligibleProducts.length}
-                selectedItemsCount={
-                  allResourcesSelected ? "All" : selectedProductIds.length
-                }
+                resourceName={{ singular: ITEM, plural: ITEM }}
+                itemCount={pageProducts.length}
+                selectedItemsCount={selectAllMatching ? "All" : pageSelectedCount}
                 onSelectionChange={handleSelectionChange}
                 headings={[
                   { title: "Sản phẩm" },
                   { title: "Trạng thái ảnh" },
                   { title: "Thao tác" },
                 ]}
-                loading={catalog.isLoading}
+                loading={products.isLoading || (products.isFetching && products.isPreviousData)}
               >
                 {bulkRows}
               </IndexTable>
+              <PageControls
+                page={bulk.page}
+                pageCount={productPageCount}
+                label={`Trang ${bulk.page}/${productPageCount} · ${matchingCount.toLocaleString("vi-VN")} ${ITEM}`}
+                onChange={(page) => updateBulk(() => ({ page }))}
+              />
 
               {/* Action Buttons for Batch */}
               <Stack distribution="equalSpacing" alignment="center">
                 <Text as="span" variant="bodySm" color="subdued">
-                  Ảnh hoàn tất được lưu trong app. Bạn có thể xem kết quả rồi chọn đưa lên Shopify.
+                  {isShopify
+                    ? "Ảnh hoàn tất được lưu trong app. Bạn có thể xem kết quả rồi chọn đưa lên Shopify."
+                    : "Ảnh hoàn tất được lưu trong app. Xem và tải về ở mục Lịch sử watermark bên dưới."}
                 </Text>
                 <Stack spacing="tight">
+                  {collectionFilter && (
+                    <Button
+                      loading={createBatch.isLoading}
+                      disabled={!canCreateForCollection || createBatch.isLoading}
+                      onClick={() =>
+                        createBatch.mutate({ collectionId: collectionFilter.id })
+                      }
+                    >
+                      {collectionWithImageCount !== null
+                        ? `Watermark cả collection "${collectionFilter.title}" (${collectionWithImageCount})`
+                        : `Watermark cả collection "${collectionFilter.title}"`}
+                    </Button>
+                  )}
                   {selectedType && (
                     <Button
                       loading={createBatch.isLoading}
@@ -1700,18 +2009,30 @@ export function UnifiedWatermarkStudio() {
                       {`Watermark cả loại "${typeLabel(selectedType.productType)}" (${selectedType.withImageCount})`}
                     </Button>
                   )}
+                  {isShopify && restoreSelectedButton}
                   <Button
                     primary
                     size="large"
                     loading={createBatch.isLoading}
-                    disabled={!canCreateBatch || createBatch.isLoading}
+                    disabled={
+                      (selectAllMatching ? !canCreateForFilter : !canCreateBatch) ||
+                      createBatch.isLoading
+                    }
                     onClick={() =>
-                      createBatch.mutate({ productIds: selectedProductIds })
+                      createBatch.mutate(
+                        selectAllMatching
+                          ? { filter: catalogFilter }
+                          : { productIds: selectedProductIds }
+                      )
                     }
                   >
-                    {selectedProductIds.length > 0
-                      ? `Tạo batch watermark (${selectedProductIds.length} sản phẩm)`
-                      : "Tạo batch watermark (Chọn SP ở trên)"}
+                    {selectAllMatching
+                      ? `Tạo batch watermark (${matchingCount.toLocaleString("vi-VN")} ${ITEM}${
+                          filterBatchCount > 1 ? `, chia ${filterBatchCount} batch` : ""
+                        })`
+                      : selectedProductIds.length > 0
+                        ? `Tạo batch watermark (${selectedProductIds.length} ${ITEM})`
+                        : `Tạo batch watermark (chọn ${ITEM} ở trên)`}
                   </Button>
                 </Stack>
               </Stack>
@@ -1719,24 +2040,14 @@ export function UnifiedWatermarkStudio() {
           ) : selectedTab === 1 ? (
             /* TAB 1: SINGLE WATERMARK */
             <Stack vertical spacing="loose">
-              <Select
-                label="Chọn sản phẩm áp dụng"
-                options={productsWithImage.map((p) => ({
-                  label: p.title,
-                  value: p.id,
-                }))}
-                value={singleProductId}
-                onChange={(val) => {
-                  setSingleProductId(val);
-                  setPreviewProductId(val);
-                }}
+              <ProductPicker
+                label={`Chọn ${ITEM} áp dụng`}
+                selected={singleProduct}
+                onSelect={setFocusedProduct}
               />
 
-              {(() => {
-                const isWm =
-                  Boolean(singleProductId && publishedByProductId.has(singleProductId)) ||
-                  activePreviewProduct?.imageUrl?.includes("/wm-");
-                if (!isWm || !singleProductId) return null;
+              {isShopify && (() => {
+                if (!singleProduct?.isWatermarked) return null;
                 return (
                   <Banner
                     status="info"
@@ -1746,9 +2057,9 @@ export function UnifiedWatermarkStudio() {
                       destructive: true,
                       loading:
                         restoreProduct.isLoading &&
-                        restoreProduct.variables === singleProductId,
+                        restoreProduct.variables === singleProduct.id,
                       disabled: restoreProduct.isLoading,
-                      onAction: () => restoreProduct.mutate(singleProductId),
+                      onAction: () => restoreProduct.mutate(singleProduct.id),
                     }}
                   >
                     <p>
@@ -1766,10 +2077,10 @@ export function UnifiedWatermarkStudio() {
                   primary
                   size="large"
                   loading={createSingleJob.isLoading || activeSingleJobId !== null}
-                  disabled={!configurationValid || !singleProductId}
+                  disabled={!configurationValid || !singleProduct}
                   onClick={() => createSingleJob.mutate()}
                 >
-                  Tạo watermark cho sản phẩm này
+                  {`Tạo watermark cho ${ITEM} này`}
                 </Button>
               </Stack>
             </Stack>
@@ -1785,41 +2096,52 @@ export function UnifiedWatermarkStudio() {
                     Gỡ bỏ ảnh watermark trên cửa hàng Shopify và đưa ảnh gốc ban đầu trở lại làm ảnh đại diện chính.
                   </Text>
                 </Stack>
-                <Button
-                  destructive
-                  loading={restoreAllProducts.isLoading}
-                  disabled={restoreAllProducts.isLoading}
-                  onClick={() => restoreAllProducts.mutate()}
-                >
-                  Khôi phục tất cả sản phẩm
-                </Button>
+                <ButtonGroup>
+                  {restoreSelectedButton}
+                  <Button
+                    destructive
+                    loading={restoreAllProducts.isLoading}
+                    disabled={restoreAllProducts.isLoading}
+                    onClick={() => restoreAllProducts.mutate()}
+                  >
+                    Khôi phục tất cả sản phẩm
+                  </Button>
+                </ButtonGroup>
               </Stack>
+
+              {selectionBar}
+              {filterActive && (
+                <Text as="p" variant="bodySm" color="subdued">
+                  Danh sách đang theo bộ lọc ở tab "Watermark hàng loạt"; lựa chọn dùng chung giữa hai tab.
+                </Text>
+              )}
 
               <IndexTable
                 resourceName={{ singular: "sản phẩm", plural: "sản phẩm" }}
-                itemCount={eligibleProducts.length}
-                selectedItemsCount={0}
+                itemCount={pageProducts.length}
+                selectedItemsCount={selectAllMatching ? "All" : pageSelectedCount}
+                onSelectionChange={handleSelectionChange}
                 headings={[
                   { title: "Sản phẩm" },
                   { title: "Trạng thái ảnh" },
                   { title: "Thao tác" },
                 ]}
+                loading={products.isLoading || (products.isFetching && products.isPreviousData)}
               >
-                {eligibleProducts.map((product, index) => {
-                  const isWatermarked = Boolean(
-                    publishedByProductId.has(product.id) ||
-                    product.imageUrl?.includes("/wm-")
-                  );
+                {pageProducts.map((product, index) => {
+                  const isWatermarked = product.isWatermarked;
                   return (
+                    // id phải là GID thật: Polaris trả id này khi tick dòng.
                     <IndexTable.Row
-                      id={`restore-${product.id}`}
+                      id={product.id}
                       key={`restore-${product.id}`}
                       position={index}
+                      selected={selectAllMatching || bulk.selectedIds.has(product.id)}
                     >
                       <IndexTable.Cell>
                         <Stack spacing="tight" alignment="center">
                           <Thumbnail
-                            source={product.imageUrl!}
+                            source={product.imageUrl}
                             alt={product.imageAltText ?? product.title}
                             size="small"
                           />
@@ -1836,34 +2158,37 @@ export function UnifiedWatermarkStudio() {
                         )}
                       </IndexTable.Cell>
                       <IndexTable.Cell>
-                        <Button
-                          destructive
-                          size="slim"
-                          loading={
-                            restoreProduct.isLoading &&
-                            restoreProduct.variables === product.id
-                          }
-                          disabled={restoreProduct.isLoading}
-                          onClick={() => restoreProduct.mutate(product.id)}
-                        >
-                          Khôi phục ảnh gốc
-                        </Button>
+                        <div onClick={(event) => event.stopPropagation()}>
+                          <Button
+                            destructive
+                            size="slim"
+                            loading={
+                              restoreProduct.isLoading &&
+                              restoreProduct.variables === product.id
+                            }
+                            disabled={restoreProduct.isLoading}
+                            onClick={() => restoreProduct.mutate(product.id)}
+                          >
+                            Khôi phục ảnh gốc
+                          </Button>
+                        </div>
                       </IndexTable.Cell>
                     </IndexTable.Row>
                   );
                 })}
               </IndexTable>
+              <PageControls
+                page={bulk.page}
+                pageCount={productPageCount}
+                label={`Trang ${bulk.page}/${productPageCount} · ${matchingCount.toLocaleString("vi-VN")} ${ITEM}`}
+                onChange={(page) => updateBulk(() => ({ page }))}
+              />
             </Stack>
           )}
         </Card.Section>
       </Card>
 
-      {/* Tự động đóng dấu theo rule (collection / loại sản phẩm / toàn shop) */}
-      <AutoWatermarkRules
-        layers={toPayload(layers)}
-        designError={designError}
-        productTypes={productTypes.data?.productTypes ?? []}
-      />
+      {/* Card Rules (components/AutoWatermarkRules.tsx) đang tạm ẩn; backend auto-watermark vẫn giữ nguyên. */}
 
       {/* SECTION 3: TIẾN ĐỘ BATCH (Nếu có batch) */}
       {(batches.data?.batches ?? []).length > 0 && (
@@ -1880,17 +2205,66 @@ export function UnifiedWatermarkStudio() {
       <Card sectioned title="Lịch sử watermark">
         {jobs.isLoading ? (
           <Spinner accessibilityLabel="Đang tải lịch sử watermark" size="small" />
+        ) : jobs.isError ? (
+          <Banner status="critical" title={`Không tải được lịch sử: ${jobs.error.message}`} />
         ) : jobRows.length === 0 ? (
           <p>Chưa có watermark job nào hoàn tất.</p>
         ) : (
-          <DataTable
-            columnContentTypes={["text", "text", "text", "text", "text"]}
-            headings={["Thời gian", "Sản phẩm", "Nội dung", "Trạng thái", "Kết quả / Thao tác"]}
-            rows={jobRows}
-          />
+          <>
+            <DataTable
+              columnContentTypes={["text", "text", "text", "text", "text"]}
+              headings={["Thời gian", "Sản phẩm", "Nội dung", "Trạng thái", "Kết quả / Thao tác"]}
+              rows={jobRows}
+            />
+            <PageControls
+              page={historyPage}
+              pageCount={historyPageCount}
+              label={`Trang ${historyPage}/${historyPageCount} · ${(jobs.data?.total ?? 0).toLocaleString("vi-VN")} job`}
+              onChange={setHistoryPage}
+            />
+          </>
         )}
       </Card>
     </Stack>
+  );
+}
+
+interface BulkState {
+  /** Bộ lọc mà trang và lựa chọn này thuộc về. */
+  filter: CatalogFilter;
+  page: number;
+  /** Sản phẩm tick tay, giữ qua các trang của cùng bộ lọc. */
+  selectedIds: ReadonlySet<string>;
+  /** "Chọn tất cả sản phẩm khớp bộ lọc": gửi bộ lọc lên server thay vì danh sách ID. */
+  allMatching: boolean;
+}
+
+function initialBulkState(filter: CatalogFilter): BulkState {
+  return { filter, page: 1, selectedIds: new Set(), allMatching: false };
+}
+
+function PageControls({
+  page,
+  pageCount,
+  label,
+  onChange,
+}: {
+  page: number;
+  pageCount: number;
+  label: string;
+  onChange(page: number): void;
+}) {
+  if (pageCount <= 1) return null;
+  return (
+    <div style={{ display: "flex", justifyContent: "center", paddingTop: "12px" }}>
+      <Pagination
+        label={label}
+        hasPrevious={page > 1}
+        onPrevious={() => onChange(page - 1)}
+        hasNext={page < pageCount}
+        onNext={() => onChange(page + 1)}
+      />
+    </div>
   );
 }
 

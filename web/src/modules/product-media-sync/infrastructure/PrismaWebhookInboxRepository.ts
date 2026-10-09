@@ -11,12 +11,18 @@ import type {
   WebhookInboxItem,
 } from "../application/ReconcileProductMedia.ts";
 import type {
+  StalledInboxProduct,
+  WebhookInboxRecoveryRepository,
+} from "../application/RecoverMediaSync.ts";
+import type {
   ProductMediaChange,
   ProductMediaState,
 } from "../domain/ProductMediaChange.ts";
 
+const UNFINISHED = ["RECEIVED", "ENQUEUED", "PROCESSING"] as const;
+
 export class PrismaWebhookInboxRepository
-  implements WebhookInboxWriter, ProductMediaReconcileRepository
+  implements WebhookInboxWriter, ProductMediaReconcileRepository, WebhookInboxRecoveryRepository
 {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -89,6 +95,7 @@ export class PrismaWebhookInboxRepository
       return null;
     }
 
+    const claimedAt = new Date();
     const claimed = await this.prisma.webhookInbox.updateMany({
       where: {
         id: row.id,
@@ -104,6 +111,7 @@ export class PrismaWebhookInboxRepository
       shopDomain: row.shop.domain,
       productId: row.productId,
       triggeredAt: row.triggeredAt,
+      claimedAt,
     };
   }
 
@@ -193,6 +201,7 @@ export class PrismaWebhookInboxRepository
               shopId: shop.id,
               productId: input.inbox.productId,
               status: { in: ["RECEIVED", "ENQUEUED", "PROCESSING"] },
+              createdAt: { lte: input.inbox.claimedAt },
             },
             data: {
               status: "IGNORED",
@@ -261,6 +270,7 @@ export class PrismaWebhookInboxRepository
           shopId: shop.id,
           productId: input.inbox.productId,
           status: { in: ["RECEIVED", "ENQUEUED", "PROCESSING"] },
+          createdAt: { lte: input.inbox.claimedAt },
         },
         data: {
           status: isIgnored(input.change) ? "IGNORED" : "PROCESSED",
@@ -285,6 +295,40 @@ export class PrismaWebhookInboxRepository
         status: { notIn: ["PROCESSED", "IGNORED"] },
       },
       data: { status: "FAILED", errorMessage: message },
+    });
+  }
+
+  async listStalledProducts(before: Date, limit: number): Promise<StalledInboxProduct[]> {
+    const rows = await this.prisma.webhookInbox.findMany({
+      where: { status: { in: [...UNFINISHED] }, updatedAt: { lt: before } },
+      orderBy: { createdAt: "desc" },
+      take: limit * 10,
+      select: { webhookId: true, productId: true, shop: { select: { domain: true } } },
+    });
+    // Mỗi sản phẩm một lượt, nhận từ webhook mới nhất (rows đã xếp mới → cũ).
+    const byProduct = new Map<string, StalledInboxProduct>();
+    for (const row of rows) {
+      const key = `${row.shop.domain}\n${row.productId}`;
+      if (!byProduct.has(key)) {
+        byProduct.set(key, {
+          shopDomain: row.shop.domain,
+          productId: row.productId,
+          webhookId: row.webhookId,
+        });
+      }
+    }
+    return [...byProduct.values()].slice(0, limit);
+  }
+
+  async releaseStalled(shopDomain: string, productId: string, before: Date): Promise<void> {
+    await this.prisma.webhookInbox.updateMany({
+      where: {
+        shop: { domain: shopDomain },
+        productId,
+        status: "PROCESSING",
+        updatedAt: { lt: before },
+      },
+      data: { status: "ENQUEUED", errorMessage: null },
     });
   }
 

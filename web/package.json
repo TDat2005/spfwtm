@@ -11,6 +11,9 @@
     "worker": "cross-env NODE_ENV=production tsx worker.ts",
     "dev:worker": "cross-env NODE_ENV=development tsx watch worker.ts",
     "prisma:generate": "prisma generate",
+    "seed:products": "tsx scripts/seed-test-products.ts",
+    "seed:shopify": "tsx scripts/seed-shopify-products.ts",
+    "watch:queue": "tsx scripts/watch-queue.ts",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest --passWithNoTests"
   },

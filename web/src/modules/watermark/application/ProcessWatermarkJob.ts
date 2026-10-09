@@ -6,6 +6,11 @@ import type {
 
 interface ProcessWatermarkJobOptions {
   resumeProcessing?: boolean;
+  /**
+   * false khi queue còn lượt retry: lỗi thì job vẫn PROCESSING, để nó tiếp tục
+   * giữ chỗ trong cửa sổ batch và UI không nhảy sang "thất bại" giữa các lần thử.
+   */
+  finalAttempt?: boolean;
 }
 
 export class ProcessWatermarkJob {
@@ -63,6 +68,7 @@ export class ProcessWatermarkJob {
       await this.repository.save(job);
       return job;
     } catch (error: unknown) {
+      if (options.finalAttempt === false) throw error;
       const message =
         error instanceof Error ? error.message : "Không xử lý được watermark";
       job.fail(message);

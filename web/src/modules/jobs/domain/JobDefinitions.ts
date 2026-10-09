@@ -1,7 +1,7 @@
 /**
  * Mỗi lane là một queue BullMQ riêng với worker và concurrency riêng:
  * - interactive: việc merchant đang chờ kết quả (job lẻ, batch nhỏ, auto-rule 1 sản phẩm).
- * - bulk: batch lớn, được DispatchWatermarkBatch nhỏ giọt vào queue để các shop xen kẽ nhau.
+ * - bulk: batch lớn, được DispatchWatermarkBatch nhỏ giọt vào queue theo cửa sổ của từng shop.
  * - system: webhook reconcile, catalog sync, publish và các job định kỳ.
  */
 export const JOB_LANES = ["interactive", "bulk", "system"] as const;
@@ -34,6 +34,7 @@ export const WATERMARK_PROCESS_V1 = {
   priority: JOB_PRIORITY.URGENT,
 } as const satisfies JobDefinition;
 
+/** Job định kỳ: đối chiếu job watermark với queue (RecoverWatermarkJobs) rồi bù chỗ cho batch bị kẹt. */
 export const WATERMARK_BATCH_DISPATCH_V1 = {
   jobName: "WATERMARK_BATCH_DISPATCH_V1",
   payloadVersion: 1,
@@ -86,12 +87,30 @@ export const PUBLICATION_RESTORE_V1 = {
   priority: JOB_PRIORITY.NORMAL,
 } as const satisfies JobDefinition;
 
+/** Khôi phục ảnh gốc của một sản phẩm: gỡ mọi ảnh watermark của app (merchant chọn nhiều sản phẩm). */
+export const PUBLICATION_RESTORE_PRODUCT_V1 = {
+  jobName: "PUBLICATION_RESTORE_PRODUCT_V1",
+  payloadVersion: 1,
+  processorVersion: 1,
+  lane: "system",
+  priority: JOB_PRIORITY.NORMAL,
+} as const satisfies JobDefinition;
+
 export const PRODUCT_MEDIA_RECONCILE_V1 = {
   jobName: "PRODUCT_MEDIA_RECONCILE_V1",
   payloadVersion: 1,
   processorVersion: 1,
   lane: "system",
   priority: JOB_PRIORITY.URGENT,
+} as const satisfies JobDefinition;
+
+/** Job định kỳ: đưa lại webhook sản phẩm bị kẹt, đánh FAILED lượt publish bị bỏ dở (RecoverMediaSync). */
+export const MEDIA_SYNC_RECOVER_V1 = {
+  jobName: "MEDIA_SYNC_RECOVER_V1",
+  payloadVersion: 1,
+  processorVersion: 1,
+  lane: "system",
+  priority: JOB_PRIORITY.LOW,
 } as const satisfies JobDefinition;
 
 export const CATALOG_RECONCILE_V1 = {

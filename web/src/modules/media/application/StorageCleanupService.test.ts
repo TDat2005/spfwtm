@@ -36,6 +36,24 @@ describe("StorageCleanupService", () => {
     expect(mockPrisma.mediaAsset.delete).toHaveBeenCalledWith({ where: { id: "asset-2" } });
   });
 
+  it("also cleans orphaned results that no watermark job points to", async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const mockPrisma = { mediaAsset: { findMany, delete: vi.fn() } } as unknown as PrismaClient;
+    const mockStorage: MediaStorage = { save: vi.fn(), read: vi.fn(), delete: vi.fn() };
+
+    await new StorageCleanupService(mockPrisma, mockStorage).cleanupProcessedAssets();
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        kind: "PROCESSED",
+        OR: [
+          { resultForJobs: { some: { publishedMedia: { isNot: null } } } },
+          { resultForJobs: { none: {} } },
+        ],
+      }),
+    }));
+  });
+
   it("removes the row even when the file is already missing", async () => {
     const mockStorage: MediaStorage = {
       save: vi.fn(),

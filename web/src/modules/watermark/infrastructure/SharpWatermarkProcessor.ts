@@ -23,10 +23,23 @@ export function configureSharpConcurrency(value: string | undefined): void {
   sharp.concurrency(threads);
 }
 
+/**
+ * Ảnh decode ra chiếm khoảng 4 byte mỗi pixel, nhân thêm vài bản sao khi ghép
+ * lớp. Ảnh khổng lồ (hoặc "bom giải nén") có thể làm worker hết RAM và kéo chết
+ * mọi job đang chạy cùng tiến trình, nên bị từ chối ngay. 50 MP vẫn dư cho ảnh
+ * sản phẩm Shopify (tối đa 25 MP) và ảnh chụp điện thoại 48 MP.
+ */
+export const MAX_INPUT_PIXELS = 50_000_000;
+
 export class SharpWatermarkProcessor implements WatermarkProcessor {
   async render(input: Parameters<WatermarkProcessor["render"]>[0]) {
-    const image = sharp(input.source, { failOn: "error" }).rotate();
-    const metadata = await image.metadata();
+    const image = sharp(input.source, {
+      failOn: "error",
+      limitInputPixels: MAX_INPUT_PIXELS,
+    }).rotate();
+    const metadata = await image.metadata().catch((error: unknown) => {
+      throw pixelLimitError(error, "Ảnh nguồn");
+    });
     const width = metadata.width ?? 1200;
     const height = metadata.height ?? 1200;
 
@@ -90,7 +103,7 @@ async function prepareLogoOverlay(
 ): Promise<PreparedOverlay> {
   const targetLogoWidth = Math.max(32, Math.round(imageWidth * configuration.logoScale));
   const alpha = Math.round(configuration.opacity * 255);
-  const prepared = await sharp(logo, { failOn: "error" })
+  const prepared = await sharp(logo, { failOn: "error", limitInputPixels: MAX_INPUT_PIXELS })
     .resize({ width: targetLogoWidth, fit: "inside", withoutEnlargement: true })
     .ensureAlpha()
     .composite([
@@ -102,7 +115,10 @@ async function prepareLogoOverlay(
       },
     ])
     .png()
-    .toBuffer();
+    .toBuffer()
+    .catch((error: unknown) => {
+      throw pixelLimitError(error, "Logo");
+    });
   return rotateOverlay(prepared, configuration.rotation);
 }
 
@@ -119,6 +135,15 @@ async function rotateOverlay(
     width: result.info.width,
     height: result.info.height,
   };
+}
+
+function pixelLimitError(error: unknown, label: string): unknown {
+  if (error instanceof Error && error.message.includes("exceeds pixel limit")) {
+    return new Error(
+      `${label} quá lớn (tối đa ${MAX_INPUT_PIXELS / 1_000_000} megapixel)`
+    );
+  }
+  return error;
 }
 
 function escapeXml(value: string): string {

@@ -17,22 +17,22 @@ export class CatalogSyncJobHandlers implements OnModuleInit {
 
   onModuleInit(): void {
     this.worker.registerHandler(CATALOG_SYNC_PAGE_V1.jobName, async (payload, context) => {
-      assertJobVersion(payload, CATALOG_SYNC_PAGE_V1);
-
       const input = {
         shopDomain: String(payload.shopDomain ?? ""),
         syncId: String(payload.syncId ?? ""),
         page: Number(payload.page),
         cursor: typeof payload.cursor === "string" ? payload.cursor : null,
       };
-      if (!input.shopDomain || !input.syncId || !Number.isInteger(input.page) || input.page < 1) {
-        throw new Error("CATALOG_SYNC_PAGE_V1 thiếu shopDomain, syncId hoặc page");
-      }
 
+      // Mọi lỗi (kể cả payload sai) đều phải kết thúc sync, không thì shop kẹt ở RUNNING.
       try {
+        assertJobVersion(payload, CATALOG_SYNC_PAGE_V1);
+        if (!input.shopDomain || !input.syncId || !Number.isInteger(input.page) || input.page < 1) {
+          throw new Error("CATALOG_SYNC_PAGE_V1 thiếu shopDomain, syncId hoặc page");
+        }
         await this.syncCatalogPage.execute(input);
       } catch (error) {
-        if (context.isFinalAttempt) {
+        if (context.isFinalAttempt && input.shopDomain && input.syncId) {
           const message = error instanceof Error ? error.message : String(error);
           this.logger.error(`Sync ${input.syncId} của ${input.shopDomain} thất bại: ${message}`);
           await this.syncs.fail(input.shopDomain, input.syncId, message);

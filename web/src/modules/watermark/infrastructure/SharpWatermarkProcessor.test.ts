@@ -1,3 +1,4 @@
+import { crc32, deflateSync } from "node:zlib";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { WatermarkDesign } from "../domain/WatermarkDesign.ts";
@@ -96,4 +97,41 @@ describe("SharpWatermarkProcessor", () => {
       }),
     ).rejects.toThrow("Lớp 2: chưa tải được logo");
   });
+
+  it("từ chối ảnh quá nhiều pixel trước khi decode, để không làm worker hết RAM", async () => {
+    const design = new WatermarkDesign([
+      { type: "TEXT", text: "© Shop", position: "CENTER", opacity: 1 },
+    ]);
+
+    await expect(
+      new SharpWatermarkProcessor().render({
+        source: pngHeader(10_000, 10_000),
+        design,
+        logos: new Map(),
+      }),
+    ).rejects.toThrow("Ảnh nguồn quá lớn (tối đa 50 megapixel)");
+  });
 });
+
+/** PNG chỉ có header khai báo kích thước: đủ để Sharp đọc metadata mà không cần 100 MP dữ liệu. */
+function pngHeader(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // RGB
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.alloc(0))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}

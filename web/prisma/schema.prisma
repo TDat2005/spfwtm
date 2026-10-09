@@ -43,6 +43,8 @@ model Shop {
   publicationAttempts PublicationAttempt[]
   watermarkTemplates  WatermarkTemplate[]
   autoWatermarkRules  AutoWatermarkRule[]
+  /// Có giá trị khi shop thuộc một tài khoản chế độ độc lập (không phải Shopify).
+  account             Account?
   uninstalledAt       DateTime?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -129,7 +131,7 @@ model WatermarkJob {
   /// Xong thì tự đưa lên Shopify (rule bật autoPublish).
   publishOnComplete Boolean            @default(false)
   status            WatermarkJobStatus @default(PENDING)
-  /// Thời điểm job batch được đưa vào BullMQ; null = còn chờ DispatchWatermarkBatch.
+  /// Thời điểm job được đưa vào BullMQ (hoặc được xác nhận còn trong queue); null = job batch còn chờ DispatchWatermarkBatch.
   enqueuedAt        DateTime?
   resultMediaId     String?            @db.VarChar(36)
   errorMessage      String?            @db.Text
@@ -146,7 +148,10 @@ model WatermarkJob {
   batch               WatermarkBatch?      @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
   @@index([shopId, createdAt])
-  @@index([shopId, status])
+  // Đếm/nhận job theo cửa sổ của từng shop (DispatchWatermarkBatch).
+  @@index([shopId, status, enqueuedAt])
+  // Đối chiếu job đã vào queue / đang chạy với BullMQ (RecoverWatermarkJobs).
+  @@index([status, enqueuedAt])
   @@index([batchId, status, enqueuedAt])
   @@map("watermark_jobs")
 }
@@ -215,6 +220,8 @@ model WatermarkBatch {
   shopId    String   @db.VarChar(30)
   designId  String?  @db.VarChar(36)
   totalJobs Int
+  /// Merchant đã bấm "Publish tất cả": job nào của batch xong sau đó cũng tự publish.
+  publishRequestedAt DateTime?
   createdAt DateTime @default(now())
 
   shop   Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
@@ -303,6 +310,8 @@ model PublicationAttempt {
   @@index([shopId, productId, status])
   @@index([shopId, shopifyMediaId])
   @@index([watermarkJobId, createdAt])
+  // Tìm lượt publish bị kẹt PUBLISHING (RecoverMediaSync).
+  @@index([status, createdAt])
   @@map("publication_attempts")
 }
 
@@ -337,4 +346,20 @@ model WatermarkTemplate {
 
   @@index([shopId])
   @@map("watermark_templates")
+}
+
+/// Tài khoản dùng app ở chế độ độc lập (mở trực tiếp, không qua Shopify).
+/// Mỗi tài khoản có một Shop riêng (domain `<id>.standalone.local`) nên mọi
+/// module tách dữ liệu theo shop dùng lại được nguyên vẹn.
+model Account {
+  id           String   @id @db.VarChar(36)
+  email        String   @unique @db.VarChar(255)
+  passwordHash String   @db.VarChar(255)
+  shopId       String   @unique @db.VarChar(30)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@map("accounts")
 }
