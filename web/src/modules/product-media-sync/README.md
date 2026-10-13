@@ -34,7 +34,8 @@ trì hoãn ngắn để tránh tạo vòng lặp.
 - Publication đang chạy: retry reconcile, không tạo công việc watermark mới.
 - Merchant upload ảnh chính mới: cập nhật snapshot nguồn, báo review và nhờ
   auto-watermark xét rule.
-- Chỉ reorder ảnh cũ: bỏ qua render.
+- Đổi thứ tự để một ảnh cũ khác lên làm ảnh chính: coi như merchant đổi ảnh
+  chính, vì bộ phân loại chỉ so id ảnh chính với `sourceMediaId`.
 - Không còn ảnh hoặc product bị xóa: hủy watermark đang chờ và báo review.
 - Mọi lookup đều có `shopId`/shop domain để product ID giống nhau giữa hai shop
   không thể chạm dữ liệu của nhau.

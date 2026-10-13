@@ -18,6 +18,7 @@
   "worker.ts",
   "scripts/**/*.ts",
   "src/**/*.ts",
-  "src/**/*.js"
+  "src/**/*.js",
+  "tests/**/*.ts"
 ]
 }

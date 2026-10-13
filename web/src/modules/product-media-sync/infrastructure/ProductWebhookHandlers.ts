@@ -48,6 +48,8 @@ export function createProductWebhookHandlers(
     deliveryMethod: DeliveryMethod.Http,
     callbackUrl: "/api/webhooks",
     callback: async (_topic, shopDomain) => {
+      // Vẫn thử cả hai bước, rồi ném lại lỗi đầu tiên: callback lỗi thì Shopify gửi lại webhook.
+      const errors: unknown[] = [];
       if (prisma) {
         try {
           const shop = await prisma.shop.findUnique({
@@ -78,6 +80,7 @@ export function createProductWebhookHandlers(
           }
         } catch (err) {
           console.error(`[Webhook APP_UNINSTALLED] Lỗi cập nhật DB cho shop ${shopDomain}:`, err);
+          errors.push(err);
         }
       }
 
@@ -90,8 +93,10 @@ export function createProductWebhookHandlers(
           }
         } catch (err) {
           console.error(`[Webhook APP_UNINSTALLED] Lỗi xoá session cho shop ${shopDomain}:`, err);
+          errors.push(err);
         }
       }
+      if (errors.length > 0) throw errors[0];
     },
   };
 

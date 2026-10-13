@@ -59,6 +59,21 @@ export class PrismaWatermarkBatchRepository
         );
       }
 
+      // Batch mới thay cho việc cũ: job tạo tay còn chờ của cùng sản phẩm thì không
+      // cần nữa. Job đã có vé trong queue được worker bỏ qua khi thấy CANCELLED.
+      const catalogProductIds = targets.map((product) => product.id);
+      for (let i = 0; i < catalogProductIds.length; i += CREATE_CHUNK_SIZE) {
+        await transaction.watermarkJob.updateMany({
+          where: {
+            shopId: shop.id,
+            catalogProductId: { in: catalogProductIds.slice(i, i + CREATE_CHUNK_SIZE) },
+            ruleId: null,
+            status: "PENDING",
+          },
+          data: { status: "CANCELLED" },
+        });
+      }
+
       const designId = await saveWatermarkDesign(transaction, shop.id, input.design);
       const batchId = randomUUID();
       const createdAt = new Date();

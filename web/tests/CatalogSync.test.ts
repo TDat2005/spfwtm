@@ -1,0 +1,187 @@
+import { describe, expect, it, vi } from "vitest";
+import { Product } from "../src/modules/catalog/domain/Product.ts";
+import {
+  CATALOG_SYNC_STALE_MS,
+  type CatalogSyncPageInput,
+  type CatalogSyncQueue,
+  type CatalogSyncRepository,
+  type CatalogSyncState,
+} from "../src/modules/catalog/application/CatalogSyncPorts.ts";
+import { GetCatalogSyncStatus, STALE_SYNC_ERROR } from "../src/modules/catalog/application/GetCatalogSyncStatus.ts";
+import type { ProductGatewayFactory, ProductPage } from "../src/modules/catalog/application/ProductGateway.ts";
+import type { ProductRepository } from "../src/modules/catalog/application/ProductRepository.ts";
+import { StartCatalogSync } from "../src/modules/catalog/application/StartCatalogSync.ts";
+import { SyncCatalogPage } from "../src/modules/catalog/application/SyncCatalogPage.ts";
+
+const SHOP = "test.myshopify.com";
+
+function product(id: string): Product {
+  return new Product({ id, title: id, status: "ACTIVE", imageUrl: null, imageAltText: null });
+}
+
+function fakeSyncs(overrides: Partial<CatalogSyncRepository> = {}): CatalogSyncRepository {
+  const state: CatalogSyncState = {
+    syncId: "sync-1",
+    status: "RUNNING",
+    syncedCount: 0,
+    error: null,
+    startedAt: null,
+    heartbeatAt: null,
+    finishedAt: null,
+  };
+  return {
+    getState: vi.fn().mockResolvedValue(state),
+    tryStart: vi.fn().mockResolvedValue(true),
+    isActive: vi.fn().mockResolvedValue(true),
+    recordPage: vi.fn().mockResolvedValue(undefined),
+    complete: vi.fn().mockResolvedValue(undefined),
+    fail: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function fakeQueue(): CatalogSyncQueue & { pages: CatalogSyncPageInput[] } {
+  const pages: CatalogSyncPageInput[] = [];
+  return {
+    pages,
+    enqueuePage: vi.fn(async (input: CatalogSyncPageInput) => {
+      pages.push(input);
+    }),
+  };
+}
+
+function fakeGateways(pages: Record<string, ProductPage>): ProductGatewayFactory {
+  return {
+    forShop: async () => ({
+      listPage: async (cursor) => pages[cursor ?? "first"]!,
+    }),
+  };
+}
+
+describe("StartCatalogSync", () => {
+  it("xếp trang đầu tiên khi bắt đầu sync mới", async () => {
+    const syncs = fakeSyncs();
+    const queue = fakeQueue();
+
+    await new StartCatalogSync(syncs, queue).execute(SHOP);
+
+    expect(queue.pages).toHaveLength(1);
+    expect(queue.pages[0]).toMatchObject({ shopDomain: SHOP, page: 1, cursor: null });
+  });
+
+  it("không xếp job khi shop đang có sync chạy", async () => {
+    const syncs = fakeSyncs({ tryStart: vi.fn().mockResolvedValue(false) });
+    const queue = fakeQueue();
+
+    const state = await new StartCatalogSync(syncs, queue).execute(SHOP);
+
+    expect(queue.pages).toHaveLength(0);
+    expect(state.status).toBe("RUNNING");
+  });
+
+  it("đánh dấu FAILED nếu không xếp được job", async () => {
+    const syncs = fakeSyncs();
+    const queue: CatalogSyncQueue = {
+      enqueuePage: vi.fn().mockRejectedValue(new Error("Redis down")),
+    };
+
+    await expect(new StartCatalogSync(syncs, queue).execute(SHOP)).rejects.toThrow("Redis down");
+    expect(syncs.fail).toHaveBeenCalled();
+  });
+});
+
+describe("GetCatalogSyncStatus", () => {
+  function runningSince(heartbeatAt: Date): CatalogSyncState {
+    return {
+      syncId: "sync-1",
+      status: "RUNNING",
+      syncedCount: 250,
+      error: null,
+      startedAt: heartbeatAt,
+      heartbeatAt,
+      finishedAt: null,
+    };
+  }
+
+  it("giữ nguyên sync đang có tiến triển", async () => {
+    const syncs = fakeSyncs({
+      getState: vi.fn().mockResolvedValue(runningSince(new Date(Date.now() - 60_000))),
+    });
+
+    const state = await new GetCatalogSyncStatus(syncs).execute(SHOP);
+
+    expect(state.status).toBe("RUNNING");
+    expect(syncs.fail).not.toHaveBeenCalled();
+  });
+
+  it("kết thúc sync quá lâu không có tiến triển để UI không xoay mãi", async () => {
+    const stale = runningSince(new Date(Date.now() - CATALOG_SYNC_STALE_MS - 1_000));
+    const failed: CatalogSyncState = { ...stale, status: "FAILED", error: STALE_SYNC_ERROR };
+    const syncs = fakeSyncs({
+      getState: vi.fn().mockResolvedValueOnce(stale).mockResolvedValueOnce(failed),
+    });
+
+    const state = await new GetCatalogSyncStatus(syncs).execute(SHOP);
+
+    expect(syncs.fail).toHaveBeenCalledWith(SHOP, "sync-1", STALE_SYNC_ERROR);
+    expect(state.status).toBe("FAILED");
+  });
+});
+
+describe("SyncCatalogPage", () => {
+  const products: ProductRepository = {
+    upsertMany: vi.fn().mockResolvedValue(undefined),
+    listByShop: vi.fn(),
+    listProductTypes: vi.fn(),
+  };
+
+  it("lưu trang hiện tại rồi xếp trang kế khi còn cursor", async () => {
+    const syncs = fakeSyncs();
+    const queue = fakeQueue();
+    const gateways = fakeGateways({
+      first: { products: [product("p1"), product("p2")], nextCursor: "c2" },
+    });
+
+    await new SyncCatalogPage(gateways, products, syncs, queue).execute({
+      shopDomain: SHOP,
+      syncId: "sync-1",
+      page: 1,
+      cursor: null,
+    });
+
+    expect(products.upsertMany).toHaveBeenCalledWith(SHOP, [product("p1"), product("p2")]);
+    expect(syncs.recordPage).toHaveBeenCalledWith(SHOP, "sync-1", 1, 2);
+    expect(queue.pages).toEqual([{ shopDomain: SHOP, syncId: "sync-1", page: 2, cursor: "c2" }]);
+    expect(syncs.complete).not.toHaveBeenCalled();
+  });
+
+  it("hoàn tất sync ở trang cuối", async () => {
+    const syncs = fakeSyncs();
+    const queue = fakeQueue();
+    const gateways = fakeGateways({ c2: { products: [product("p3")], nextCursor: null } });
+
+    await new SyncCatalogPage(gateways, products, syncs, queue).execute({
+      shopDomain: SHOP,
+      syncId: "sync-1",
+      page: 2,
+      cursor: "c2",
+    });
+
+    expect(queue.pages).toHaveLength(0);
+    expect(syncs.complete).toHaveBeenCalledWith(SHOP, "sync-1");
+  });
+
+  it("bỏ qua job của sync đã bị thay thế", async () => {
+    const syncs = fakeSyncs({ isActive: vi.fn().mockResolvedValue(false) });
+    const forShop = vi.fn();
+
+    await new SyncCatalogPage({ forShop }, products, syncs, fakeQueue()).execute({
+      shopDomain: SHOP,
+      syncId: "old-sync",
+      page: 3,
+      cursor: "c3",
+    });
+
+    expect(forShop).not.toHaveBeenCalled();
+  });
+});
