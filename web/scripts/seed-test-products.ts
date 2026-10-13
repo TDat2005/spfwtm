@@ -20,21 +20,11 @@
  * storage cục bộ như ảnh thật. Nhiều sản phẩm dùng chung một bộ ảnh nhỏ, nên
  * 10.000 sản phẩm chỉ tốn vài MB.
  */
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { PrismaClient } from "../src/generated/prisma/client.ts";
-import { MediaService } from "../src/modules/media/application/MediaService.ts";
-import { FetchRemoteImageDownloader } from "../src/modules/media/infrastructure/FetchRemoteImageDownloader.ts";
-import { LocalMediaStorage } from "../src/modules/media/infrastructure/LocalMediaStorage.ts";
-import { PrismaMediaAssetRepository } from "../src/modules/media/infrastructure/PrismaMediaAssetRepository.ts";
-import { Sha256ContentHasher } from "../src/modules/media/infrastructure/Sha256ContentHasher.ts";
-import { UPLOADED_PRODUCT_PREFIX } from "../src/modules/standalone/domain/UploadedImage.ts";
 import { createPrismaClient } from "../src/shared/infrastructure/prisma.ts";
-import { positiveInteger, productTypeFor, sampleImage } from "./sampleImages.ts";
-
-const SEED_PREFIX = `${UPLOADED_PRODUCT_PREFIX}seed-`;
-const INSERT_CHUNK = 1_000;
+import { positiveInteger } from "./sampleImages.ts";
+import { SEED_PREFIX, seedProducts } from "./seedProducts.ts";
 
 const { values: args } = parseArgs({
   options: {
@@ -68,37 +58,14 @@ async function main(): Promise<void> {
     const size = positiveInteger(args.size, "--size");
 
     console.log(`Tạo ${imageCount} ảnh mẫu ${size}x${size}...`);
-    const media = new MediaService(
-      new FetchRemoteImageDownloader(),
-      new LocalMediaStorage(join(process.cwd(), "storage", "media")),
-      new Sha256ContentHasher(),
-      new PrismaMediaAssetRepository(prisma),
-    );
-    const imageUrls: string[] = [];
-    for (let i = 0; i < imageCount; i++) {
-      const asset = await media.storeUploaded(shop.domain, await sampleImage(i, imageCount, size), "image/jpeg");
-      imageUrls.push(`/api/media/assets/${asset.id}/content`);
-    }
-
-    const runId = new Date().toISOString().slice(5, 16).replace("T", " ");
-    const products = Array.from({ length: count }, (_, i) => {
-      const imageUrl = imageUrls[i % imageUrls.length]!;
-      return {
-        shopId: shop.id,
-        shopifyProductId: `${SEED_PREFIX}${randomUUID()}`,
-        title: `Sản phẩm thử #${i + 1} (${runId})`,
-        status: "ACTIVE" as const,
-        productType: productTypeFor(i, count, perType, args.type!),
-        imageUrl,
-        originalImageUrl: imageUrl,
-      };
+    const types = await seedProducts(prisma, shop, {
+      count,
+      type: args.type!,
+      perType,
+      images: imageCount,
+      size,
+      onProgress: (created) => process.stdout.write(`\rĐã tạo ${created}/${count} sản phẩm`),
     });
-    for (let i = 0; i < products.length; i += INSERT_CHUNK) {
-      await prisma.catalogProduct.createMany({ data: products.slice(i, i + INSERT_CHUNK) });
-      process.stdout.write(`\rĐã tạo ${Math.min(i + INSERT_CHUNK, products.length)}/${count} sản phẩm`);
-    }
-
-    const types = [...new Set(products.map((product) => product.productType))];
     console.log(`\nXong. Shop ${shop.domain}, product type: ${types.map((t) => `"${t}"`).join(", ")}.`);
     console.log("Tạo batch watermark theo từng product type trên giao diện để chạy thử.");
   } finally {
